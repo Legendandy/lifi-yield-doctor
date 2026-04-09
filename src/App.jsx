@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount, useChainId } from 'wagmi'
+import { useConnectModal } from '@rainbow-me/rainbowkit'
+import HomePage from './HomePage'
 import { getVaults, getPortfolioPositions } from './services/earnApi'
 import { getDiagnosis } from './services/aiDiagnosis'
 import { computeStabilityScore, getHealthTag, getRiskFilters } from './utils/stability'
@@ -9,8 +10,10 @@ import { executeDeposit } from './services/executeDeposit'
 export default function App() {
   const { address, isConnected } = useAccount()
   const chainId = useChainId()
+  const { openConnectModal } = useConnectModal()
 
-  const [riskMode, setRiskMode] = useState(null) // 'safe' | 'balanced' | 'degen'
+  const [showDashboard, setShowDashboard] = useState(false)
+  const [riskMode, setRiskMode] = useState(null)
   const [positions, setPositions] = useState([])
   const [vaults, setVaults] = useState([])
   const [diagnosis, setDiagnosis] = useState('')
@@ -18,37 +21,39 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [depositingVault, setDepositingVault] = useState(null)
 
-  // Once wallet is connected and risk mode is chosen, run the diagnosis
+  // When wallet connects, auto-show dashboard
+  useEffect(() => {
+    if (isConnected && showDashboard === false) {
+      setShowDashboard(true)
+    }
+    if (!isConnected) {
+      setShowDashboard(false)
+      setRiskMode(null)
+      setDiagnosis('')
+    }
+  }, [isConnected])
+
+  // When risk mode is chosen, run the diagnosis
   useEffect(() => {
     if (isConnected && address && riskMode) {
       runDiagnosis()
     }
-  }, [isConnected, address, riskMode])
+  }, [riskMode])
 
   async function runDiagnosis() {
     setLoading(true)
     setDiagnosis('')
-
     try {
-      // Fetch portfolio positions
       const userPositions = await getPortfolioPositions(address)
       const hasPositions = userPositions && userPositions.length > 0
       setIsNewUser(!hasPositions)
       setPositions(userPositions || [])
 
-      // Fetch available vaults based on risk mode
       const filters = getRiskFilters(riskMode)
-      const availableVaults = await getVaults({
-        chainId,
-        sortBy: 'apy',
-        ...filters,
-      })
-
-      // Filter for only depositable vaults
+      const availableVaults = await getVaults({ chainId, sortBy: 'apy', ...filters })
       const depositable = availableVaults.filter((v) => v.isTransactional)
       setVaults(depositable)
 
-      // Get AI diagnosis
       const aiText = await getDiagnosis({
         positions: userPositions,
         availableVaults: depositable,
@@ -67,16 +72,9 @@ export default function App() {
   async function handleDeposit(vault) {
     setDepositingVault(vault.address)
     try {
-      // For demo: deposit 1 USDC (6 decimals = 1000000)
-      // In production you'd show an amount input
       const fromToken = vault.underlyingTokens[0]
-      await executeDeposit({
-        vault,
-        fromToken,
-        fromAmount: '1000000', // 1 USDC
-        userAddress: address,
-      })
-      alert('Deposit successful! Refreshing positions...')
+      await executeDeposit({ vault, fromToken, fromAmount: '1000000', userAddress: address })
+      alert('Deposit successful! Refreshing...')
       runDiagnosis()
     } catch (err) {
       alert(`Deposit failed: ${err.message}`)
@@ -85,197 +83,177 @@ export default function App() {
     }
   }
 
-  // Stability bar width as percentage
   function stabilityBarWidth(vault) {
     const score = computeStabilityScore(vault)
-    if (score === null) return 50
-    return Math.round(score * 100)
+    return score === null ? 50 : Math.round(score * 100)
   }
 
-  return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '2rem', fontFamily: 'sans-serif' }}>
+  // ── SCREEN 1: Homepage (not connected or not yet showing dashboard)
+  if (!showDashboard) {
+    return <HomePage onConnected={() => setShowDashboard(true)} />
+  }
 
-      {/* Header */}
+  // ── SCREEN 2: Risk mode picker (connected, no risk mode chosen yet)
+  if (!riskMode) {
+    return (
+      <div style={{ maxWidth: 600, margin: '0 auto', padding: '4rem 2rem', textAlign: 'center', fontFamily: 'Manrope, sans-serif' }}>
+        <h2 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.5rem' }}>What's your risk preference?</h2>
+        <p style={{ color: '#64748b', marginBottom: '2rem' }}>This filters which vaults we recommend for your diagnosis.</p>
+        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+          {[
+            { key: 'safe', label: '🛡️ Safe', desc: 'Stablecoins, high TVL' },
+            { key: 'balanced', label: '🩺 Balanced', desc: 'Any token, moderate risk' },
+            { key: 'degen', label: '⚡ Degen', desc: 'Highest APY, no filter' },
+          ].map((mode) => (
+            <button
+              key={mode.key}
+              onClick={() => setRiskMode(mode.key)}
+              style={{
+                padding: '1.25rem 1.5rem', fontSize: '1rem', cursor: 'pointer',
+                borderRadius: 16, border: '2px solid #e2e8f0', background: 'white',
+                fontFamily: 'Manrope, sans-serif', fontWeight: 700, minWidth: 140,
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => e.target.style.borderColor = '#10b981'}
+              onMouseLeave={e => e.target.style.borderColor = '#e2e8f0'}
+            >
+              <div>{mode.label}</div>
+              <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 500, marginTop: 4 }}>{mode.desc}</div>
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => { setShowDashboard(false) }}
+          style={{ marginTop: '2rem', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '0.85rem' }}
+        >
+          ← Back to homepage
+        </button>
+      </div>
+    )
+  }
+
+  // ── SCREEN 3: Loading
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', fontFamily: 'Inter, sans-serif' }}>
+        <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🩺</div>
+        <p style={{ fontSize: '1.1rem', color: '#64748b' }}>Running your yield diagnosis...</p>
+      </div>
+    )
+  }
+
+  // ── SCREEN 4: Dashboard
+  return (
+    <div style={{ maxWidth: 960, margin: '0 auto', padding: '2rem', fontFamily: 'Inter, sans-serif' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h1>🩺 Yield Doctor</h1>
-        <ConnectButton />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: '1.5rem' }}>🩺</span>
+          <span style={{ fontFamily: 'Manrope, sans-serif', fontWeight: 800, fontSize: '1.25rem' }}>Yield Doctor</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+            {address?.slice(0,6)}...{address?.slice(-4)} · {riskMode}
+          </span>
+          <button
+            onClick={() => { setRiskMode(null); setDiagnosis('') }}
+            style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.8rem' }}
+          >
+            Change risk mode
+          </button>
+        </div>
       </div>
 
-      {/* Step 1: Not connected */}
-      {!isConnected && (
-        <div style={{ textAlign: 'center', padding: '4rem' }}>
-          <h2>Connect your wallet to get your yield diagnosis</h2>
-          <p>We'll check your positions, score their stability, and find better opportunities — automatically.</p>
-        </div>
-      )}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
 
-      {/* Step 2: Connected, pick risk mode */}
-      {isConnected && !riskMode && (
-        <div style={{ textAlign: 'center', padding: '2rem' }}>
-          <h2>What's your risk preference?</h2>
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '1rem' }}>
-            {['safe', 'balanced', 'degen'].map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setRiskMode(mode)}
-                style={{
-                  padding: '1rem 2rem',
-                  fontSize: '1.1rem',
-                  cursor: 'pointer',
-                  borderRadius: 8,
-                  border: '2px solid #333',
-                  background: 'white',
-                }}
-              >
-                {mode === 'safe' ? '🛡️ Safe' : mode === 'balanced' ? '🩺 Balanced' : '⚡ Degen'}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Loading */}
-      {isConnected && riskMode && loading && (
-        <div style={{ textAlign: 'center', padding: '3rem' }}>
-          <p>Running your yield diagnosis...</p>
-        </div>
-      )}
-
-      {/* Step 4: Results */}
-      {isConnected && riskMode && !loading && diagnosis && (
+        {/* Left: Positions */}
         <div>
-          {/* Change risk mode */}
-          <div style={{ marginBottom: '1rem' }}>
-            <span>Risk mode: <strong>{riskMode}</strong> </span>
-            <button onClick={() => { setRiskMode(null); setDiagnosis('') }} style={{ marginLeft: 8 }}>
-              Change
-            </button>
-          </div>
-
-          {/* Two-column layout */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-
-            {/* Left Panel: Positions or Idle Assets */}
-            <div>
-              <h3>{isNewUser ? 'Your Idle Assets' : 'Your Current Positions'}</h3>
-
-              {isNewUser && (
-                <div style={{ padding: '1rem', background: '#f9f9f9', borderRadius: 8 }}>
-                  <p>⚪ No vault positions found on this wallet.</p>
-                  <p>Check the recommendations on the right to get started.</p>
+          <h3 style={{ fontFamily: 'Manrope, sans-serif', fontWeight: 800, marginBottom: '1rem' }}>
+            {isNewUser ? 'Your Idle Assets' : 'Your Current Positions'}
+          </h3>
+          {isNewUser && (
+            <div style={{ padding: '1.5rem', background: '#f8fafc', borderRadius: 12, color: '#64748b' }}>
+              <p style={{ margin: 0 }}>⚪ No vault positions found.</p>
+              <p style={{ margin: '0.5rem 0 0', fontSize: '0.9rem' }}>Check recommendations on the right to get started.</p>
+            </div>
+          )}
+          {!isNewUser && positions.map((pos, i) => {
+            const matchingVault = vaults.find(v => v.underlyingTokens?.[0]?.symbol === pos.asset.symbol)
+            const score = matchingVault ? computeStabilityScore(matchingVault) : null
+            const bestApy = vaults[0]?.analytics?.apy?.total || 0
+            const currentApy = matchingVault?.analytics?.apy?.total || 0
+            const tag = getHealthTag(score, currentApy, bestApy)
+            return (
+              <div key={i} style={{ padding: '1rem', background: 'white', border: '1px solid #f1f5f9', borderRadius: 12, marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <strong>{pos.asset.symbol}</strong>
+                  <span style={{ color: tag.color, fontWeight: 700, fontSize: '0.85rem' }}>{tag.label}</span>
                 </div>
-              )}
-
-              {!isNewUser && positions.map((pos, i) => {
-                // Find matching vault for stability score
-                const matchingVault = vaults.find(
-                  (v) => v.underlyingTokens?.[0]?.symbol === pos.asset.symbol
-                )
-                const score = matchingVault ? computeStabilityScore(matchingVault) : null
-                const bestApy = vaults[0]?.analytics?.apy?.total || 0
-                const currentApy = matchingVault?.analytics?.apy?.total || 0
-                const tag = getHealthTag(score, currentApy, bestApy)
-
-                return (
-                  <div key={i} style={{ padding: '1rem', border: '1px solid #eee', borderRadius: 8, marginBottom: '1rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <strong>{pos.asset.symbol}</strong>
-                      <span style={{ color: tag.color, fontWeight: 'bold' }}>{tag.label}</span>
-                    </div>
-                    <div>Protocol: {pos.protocolName}</div>
-                    <div>Balance: ${pos.balanceUsd}</div>
-                    {matchingVault && (
-                      <>
-                        <div>APY: {(matchingVault.analytics.apy.total * 100).toFixed(2)}%</div>
-                        {/* Stability Bar */}
-                        <div style={{ marginTop: 8 }}>
-                          <small>Stability</small>
-                          <div style={{ background: '#eee', borderRadius: 4, height: 8, marginTop: 4 }}>
-                            <div style={{
-                              width: `${stabilityBarWidth(matchingVault)}%`,
-                              background: tag.color,
-                              height: '100%',
-                              borderRadius: 4,
-                              transition: 'width 0.5s ease'
-                            }} />
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Right Panel: AI Diagnosis + Recommendations */}
-            <div>
-              <h3>🤖 AI Diagnosis</h3>
-              <div style={{ padding: '1rem', background: '#f0fdf4', borderRadius: 8, marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                {diagnosis}
-              </div>
-
-              <h3>Recommended Vaults</h3>
-              {vaults.slice(0, 5).map((vault, i) => {
-                const score = computeStabilityScore(vault)
-                const apy = vault.analytics.apy.total != null
-                  ? (vault.analytics.apy.total * 100).toFixed(2) + '%'
-                  : 'N/A'
-                const apy30d = vault.analytics.apy30d != null
-                  ? (vault.analytics.apy30d * 100).toFixed(2) + '%'
-                  : 'N/A'
-
-                return (
-                  <div key={i} style={{ padding: '1rem', border: '1px solid #eee', borderRadius: 8, marginBottom: '1rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <strong>{vault.name}</strong>
-                      <span>{apy} APY</span>
-                    </div>
-                    <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                      {vault.protocol.name} · {vault.network}
-                    </div>
-                    <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
-                      30d avg: {apy30d} · TVL: ${Number(vault.analytics.tvl.usd).toLocaleString()}
-                    </div>
-
-                    {/* Stability Bar */}
-                    {score !== null && (
-                      <div style={{ marginTop: 8 }}>
-                        <small>Stability: {Math.round(score * 100)}%</small>
-                        <div style={{ background: '#eee', borderRadius: 4, height: 8, marginTop: 4 }}>
-                          <div style={{
-                            width: `${Math.round(score * 100)}%`,
-                            background: score > 0.7 ? '#22c55e' : score > 0.4 ? '#f59e0b' : '#ef4444',
-                            height: '100%',
-                            borderRadius: 4,
-                          }} />
-                        </div>
+                <div style={{ fontSize: '0.85rem', color: '#64748b' }}>{pos.protocolName} · ${pos.balanceUsd}</div>
+                {matchingVault && (
+                  <>
+                    <div style={{ fontSize: '0.85rem', marginTop: 4 }}>APY: {(matchingVault.analytics.apy.total * 100).toFixed(2)}%</div>
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: 4 }}>Stability</div>
+                      <div style={{ background: '#f1f5f9', borderRadius: 4, height: 8 }}>
+                        <div style={{ width: `${stabilityBarWidth(matchingVault)}%`, background: tag.color, height: '100%', borderRadius: 4, transition: 'width 0.5s ease' }} />
                       </div>
-                    )}
-
-                    <button
-                      onClick={() => handleDeposit(vault)}
-                      disabled={depositingVault === vault.address}
-                      style={{
-                        marginTop: 12,
-                        width: '100%',
-                        padding: '0.5rem',
-                        background: '#16a34a',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 6,
-                        cursor: 'pointer',
-                        fontWeight: 'bold',
-                      }}
-                    >
-                      {depositingVault === vault.address ? 'Depositing...' : 'Deposit'}
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
         </div>
-      )}
+
+        {/* Right: AI Diagnosis + Vaults */}
+        <div>
+          <h3 style={{ fontFamily: 'Manrope, sans-serif', fontWeight: 800, marginBottom: '1rem' }}>🤖 AI Diagnosis</h3>
+          <div style={{ padding: '1rem', background: '#f0fdf4', borderRadius: 12, marginBottom: '1.5rem', lineHeight: 1.7, fontSize: '0.95rem', border: '1px solid #bbf7d0' }}>
+            {diagnosis || 'No diagnosis available.'}
+          </div>
+
+          <h3 style={{ fontFamily: 'Manrope, sans-serif', fontWeight: 800, marginBottom: '1rem' }}>Recommended Vaults</h3>
+          {vaults.slice(0, 5).map((vault, i) => {
+            const score = computeStabilityScore(vault)
+            const apy = vault.analytics.apy.total != null ? (vault.analytics.apy.total * 100).toFixed(2) + '%' : 'N/A'
+            const apy30d = vault.analytics.apy30d != null ? (vault.analytics.apy30d * 100).toFixed(2) + '%' : 'N/A'
+            return (
+              <div key={i} style={{ padding: '1rem', background: 'white', border: '1px solid #f1f5f9', borderRadius: 12, marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                  <strong style={{ fontSize: '0.9rem' }}>{vault.name}</strong>
+                  <span style={{ fontWeight: 700, color: '#10b981' }}>{apy}</span>
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: 6 }}>
+                  {vault.protocol.name} · {vault.network} · 30d avg: {apy30d} · TVL: ${Number(vault.analytics.tvl.usd).toLocaleString()}
+                </div>
+                {score !== null && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: 4 }}>Stability: {Math.round(score * 100)}%</div>
+                    <div style={{ background: '#f1f5f9', borderRadius: 4, height: 8 }}>
+                      <div style={{
+                        width: `${Math.round(score * 100)}%`,
+                        background: score > 0.7 ? '#22c55e' : score > 0.4 ? '#f59e0b' : '#ef4444',
+                        height: '100%', borderRadius: 4,
+                      }} />
+                    </div>
+                  </div>
+                )}
+                <button
+                  onClick={() => handleDeposit(vault)}
+                  disabled={depositingVault === vault.address}
+                  style={{
+                    width: '100%', padding: '0.5rem', background: depositingVault === vault.address ? '#94a3b8' : '#0f172a',
+                    color: 'white', border: 'none', borderRadius: 8, cursor: depositingVault === vault.address ? 'not-allowed' : 'pointer',
+                    fontWeight: 700, fontSize: '0.9rem',
+                  }}
+                >
+                  {depositingVault === vault.address ? 'Depositing...' : 'Deposit'}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }

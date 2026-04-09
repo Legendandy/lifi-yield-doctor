@@ -24,7 +24,5 @@ dist-ssr
 *.sw?
 .env
 package-lock.json
-
 package.json
-
 vite.config.js
