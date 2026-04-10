@@ -1,38 +1,40 @@
+// src/services/aiDiagnosis.js
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY
 
-// Takes positions (or idle balances) + available vaults + risk mode
-// Returns a plain-English diagnosis string from Claude
-export async function getDiagnosis({ positions, availableVaults, riskMode, isNewUser }) {
+export async function getDiagnosis({ positions, availableVaults, isNewUser }) {
+  // Build data-grounded context — AI can ONLY reference numbers that appear here
   const positionSummary = isNewUser
-    ? `The user has no vault positions. They have idle tokens in their wallet.`
+    ? 'User has no active vault positions.'
     : positions.map(p =>
-        `${p.asset.symbol} on chain ${p.chainId} via ${p.protocolName}: $${p.balanceUsd} balance`
+        `- ${p.asset?.symbol} via ${p.protocolName}: $${p.balanceUsd} balance`
       ).join('\n')
 
   const vaultSummary = availableVaults.slice(0, 5).map(v => {
     const apy = v.analytics.apy.total != null
-      ? (v.analytics.apy.total * 100).toFixed(2) + '%'
-      : 'N/A'
+      ? `${(v.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
     const apy30d = v.analytics.apy30d != null
-      ? (v.analytics.apy30d * 100).toFixed(2) + '%'
+      ? `${(v.analytics.apy30d * 100).toFixed(2)}%` : 'N/A'
+    const drift30d = v.analytics.apy.total && v.analytics.apy30d
+      ? `${(((v.analytics.apy.total - v.analytics.apy30d) / v.analytics.apy30d) * 100).toFixed(1)}%`
       : 'N/A'
-    return `${v.name} (${v.protocol.name}) — APY: ${apy}, 30d avg: ${apy30d}, TVL: $${Number(v.analytics.tvl.usd).toLocaleString()}`
+    const tvlM = (Number(v.analytics.tvl.usd) / 1e6).toFixed(1)
+    return `- ${v.name} (${v.protocol.name}): APY ${apy}, 30d avg ${apy30d}, 30d drift ${drift30d}, TVL $${tvlM}M`
   }).join('\n')
 
-  const prompt = `You are Yield Doctor, a DeFi yield advisor. Be concise, direct, and helpful. 2-4 sentences max.
+  const prompt = `You are Yield Doctor, a DeFi yield advisor. Your diagnosis must ONLY reference numbers and vault names listed below. Do not invent any figures.
 
-User's risk preference: ${riskMode.toUpperCase()}
-
-${isNewUser ? 'User has no vault positions. Recommend where to start.' : "User's current positions:"}
+${isNewUser ? "User's situation: No vault positions." : "User's current positions:"}
 ${positionSummary}
 
-Best available vaults right now (filtered for their risk preference):
+Available vaults (real data):
 ${vaultSummary}
 
 ${isNewUser
-  ? 'Tell the user what token they have sitting idle and recommend the single best vault from the list above. Be specific about APY and why it suits their risk preference.'
-  : 'Diagnose their current positions. Are they in good vaults? Are better options available? Be specific with vault names and APY numbers. Keep it to 2-4 sentences.'
-}`
+  ? 'In 2-3 sentences: Recommend the single best vault from the list above. Reference its exact APY and explain why.'
+  : 'In 2-3 sentences: Are the user\'s positions competitive? Is there a better option? Reference exact vault names and APY numbers from the data above.'
+}
+
+Be specific, grounded, and concise.`
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -49,6 +51,7 @@ ${isNewUser
     }),
   })
 
+  if (!response.ok) throw new Error(`AI API error: ${response.status}`)
   const data = await response.json()
   return data.content[0].text
 }

@@ -1,37 +1,50 @@
+// src/services/earnApi.js
 const EARN_BASE_URL = 'https://earn.li.fi'
 const API_KEY = import.meta.env.VITE_LIFI_API_KEY
 
-const headers = {
-  'x-lifi-api-key': API_KEY,
-}
+const headers = { 'x-lifi-api-key': API_KEY }
 
-// Fetch vaults filtered by chainId, asset, and minTvlUsd
-// sortBy: 'apy' or 'tvl'
-export async function getVaults({ chainId, asset, sortBy = 'apy', minTvlUsd = 100000, limit = 20 }) {
+export async function getVaults({ chainId, asset, protocol, sortBy = 'apy', minTvlUsd, limit = 20, cursor } = {}) {
   const params = new URLSearchParams()
   if (chainId) params.set('chainId', String(chainId))
   if (asset) params.set('asset', asset)
+  if (protocol) params.set('protocol', protocol)
   if (sortBy) params.set('sortBy', sortBy)
-  if (minTvlUsd) params.set('minTvlUsd', String(minTvlUsd))
+  if (minTvlUsd != null) params.set('minTvlUsd', String(minTvlUsd))
   params.set('limit', String(limit))
+  if (cursor) params.set('cursor', cursor)
 
   const res = await fetch(`${EARN_BASE_URL}/v1/earn/vaults?${params}`, { headers })
+  if (!res.ok) throw new Error(`getVaults failed: ${res.status}`)
   const json = await res.json()
-  return json.data // array of NormalizedVault
+  return json.data
 }
 
-// Fetch a user's current DeFi positions across all protocols
+export async function getVaultById(chainId, address) {
+  const res = await fetch(
+    `${EARN_BASE_URL}/v1/earn/vaults/${chainId}/${address}`,
+    { headers }
+  )
+  if (!res.ok) throw new Error(`getVaultById failed: ${res.status}`)
+  return res.json()
+}
+
 export async function getPortfolioPositions(userAddress) {
   const res = await fetch(
     `${EARN_BASE_URL}/v1/earn/portfolio/${userAddress}/positions`,
     { headers }
   )
+  if (!res.ok) throw new Error(`getPortfolioPositions failed: ${res.status}`)
   const json = await res.json()
-  return json.positions // array of positions
+  return json.positions || []
 }
 
-// Get all supported chains that have active vaults
 export async function getSupportedChains() {
   const res = await fetch(`${EARN_BASE_URL}/v1/earn/chains`, { headers })
+  return res.json()
+}
+
+export async function getProtocols() {
+  const res = await fetch(`${EARN_BASE_URL}/v1/earn/protocols`, { headers })
   return res.json()
 }

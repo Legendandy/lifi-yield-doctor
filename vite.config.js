@@ -8,7 +8,7 @@ export default defineConfig({
     port: 5173,                  // optional, default 5173
     strictPort: false,           // optional, allows fallback if 5173 is busy
     allowedHosts: [
-      '5173--019d73b0-fa12-7a86-ad61-dcea2d8efcf8.eu-central-1-01.gitpod.dev'
+      '5173--019d74c9-91b5-7369-9f52-1bbfe65e8c0f.eu-central-1-01.gitpod.dev'
     ]
   }
 })

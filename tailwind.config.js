@@ -1,20 +1,52 @@
-/** @type {import('tailwindcss').Config} */
+// tailwind.config.js
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
-        "primary": "#0f172a",
-        "accent": "#10b981",
+        // The Clinical Architect palette
+        "primary-container": "#131b2e",
+        "on-primary-container": "#7c839b",
+        "surface": "#f7f9fb",
+        "surface-bright": "#f7f9fb",
+        "surface-dim": "#d8dadc",
+        "surface-container": "#eceef0",
+        "surface-container-low": "#f2f4f6",
+        "surface-container-high": "#e6e8ea",
+        "surface-container-highest": "#e0e3e5",
+        "surface-container-lowest": "#ffffff",
+        "on-surface": "#191c1e",
+        "on-surface-variant": "#45464d",
+        "outline-variant": "#c6c6cd",
+        "outline": "#76777d",
+        "tertiary-container": "#002109",
+        "on-tertiary-container": "#009844",
+        "tertiary-fixed": "#6bff8f",
+        "tertiary-fixed-dim": "#4ae176",
+        "secondary-container": "#d0e1fb",
+        "on-secondary-container": "#54647a",
+        "error-container": "#ffdad6",
+        "on-error-container": "#93000a",
+        "error": "#ba1a1a",
+        "background": "#f7f9fb",
+        "on-background": "#191c1e",
+        "secondary": "#505f76",
+        "on-secondary": "#ffffff",
+        "secondary-fixed-dim": "#b7c8e1",
+        "inverse-surface": "#2d3133",
       },
       fontFamily: {
-        "headline": ["Manrope", "sans-serif"],
-        "body": ["Inter", "sans-serif"],
+        headline: ["Manrope", "sans-serif"],
+        body: ["Inter", "sans-serif"],
+        label: ["Inter", "sans-serif"],
+      },
+      borderRadius: {
+        DEFAULT: "0.25rem",
+        lg: "0.5rem",
+        xl: "0.75rem",
+        full: "9999px",
       },
     },
   },
   plugins: [],
-}
+};
