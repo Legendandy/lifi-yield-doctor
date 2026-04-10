@@ -5,7 +5,7 @@ export async function getDiagnosis({ positions, availableVaults, isNewUser }) {
   const positionSummary = isNewUser
     ? 'User has no active vault positions.'
     : positions.map(p =>
-        `- ${p.asset?.symbol} via ${p.protocolName}: $${p.balanceUsd} balance`
+        `- ${p.asset?.symbol} via ${p.protocolName}: $${Number(p.balanceUsd || 0).toLocaleString()} balance`
       ).join('\n')
 
   const vaultSummary = availableVaults.slice(0, 5).map(v => {
@@ -13,11 +13,8 @@ export async function getDiagnosis({ positions, availableVaults, isNewUser }) {
       ? `${(v.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
     const apy30d = v.analytics.apy30d != null
       ? `${(v.analytics.apy30d * 100).toFixed(2)}%` : 'N/A'
-    const drift30d = v.analytics.apy.total && v.analytics.apy30d
-      ? `${(((v.analytics.apy.total - v.analytics.apy30d) / v.analytics.apy30d) * 100).toFixed(1)}%`
-      : 'N/A'
     const tvlM = (Number(v.analytics.tvl.usd) / 1e6).toFixed(1)
-    return `- ${v.name} (${v.protocol.name}): APY ${apy}, 30d avg ${apy30d}, 30d drift ${drift30d}, TVL $${tvlM}M`
+    return `- ${v.name} (${v.protocol.name}): APY ${apy}, 30d avg ${apy30d}, TVL $${tvlM}M`
   }).join('\n')
 
   const prompt = `You are Yield Doctor, a DeFi yield advisor. Your diagnosis must ONLY reference numbers and vault names listed below. Do not invent any figures.
@@ -43,7 +40,7 @@ Be specific, grounded, and concise.`
     },
     body: JSON.stringify({
       model: 'accounts/fireworks/models/qwen3-vl-30b-a3b-instruct',
-      max_tokens: 300,
+      max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     }),
   })

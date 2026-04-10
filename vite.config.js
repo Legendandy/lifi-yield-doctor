@@ -8,7 +8,7 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
     allowedHosts: [
-      '5173--019d74c9-91b5-7369-9f52-1bbfe65e8c0f.eu-central-1-01.gitpod.dev'
+      '5173--019d775f-a560-7bdd-92ec-eda6053883d9.eu-central-1-01.gitpod.dev'
     ],
     proxy: {
       '/earn-api': {

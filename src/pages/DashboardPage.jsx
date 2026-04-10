@@ -5,7 +5,14 @@ import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
 import { getPortfolioPositions, getVaults } from '../services/earnApi'
 import { getDiagnosis } from '../services/aiDiagnosis'
-import { computeStabilityScore, getHealthTag } from '../utils/stability'
+
+// Simple health label based on APY competitiveness vs top vault
+function getHealthTag(currentApy, bestAvailableApy) {
+  if (currentApy == null || bestAvailableApy == null) return { label: 'Unknown', color: '#76777d' }
+  const isUnderperforming = bestAvailableApy > currentApy * 1.2
+  if (isUnderperforming) return { label: '🔴 Underperforming', color: '#ef4444' }
+  return { label: '🟢 Healthy', color: '#22c55e' }
+}
 
 export default function DashboardPage() {
   const { address } = useAccount()
@@ -32,15 +39,16 @@ export default function DashboardPage() {
       setHasPositions(hasAny)
       setPositions(userPositions || [])
 
-      // Fetch top vaults for comparison and diagnosis
+      // Fetch top SANE vaults (APY < 200%, TVL > $500k, consistent rolling data)
+      // Using minTvlUsd=500000 to ensure real liquidity and sortBy=apy for best opportunities
       const topVaults = await getVaults({
         sortBy: 'apy',
-        minTvlUsd: 500000,
+        minTvlUsd: 500_000,
         limit: 10,
       })
       setVaults(topVaults)
 
-      // AI diagnosis using ONLY real data passed in
+      // AI diagnosis using ONLY real sanitised data
       const aiText = await getDiagnosis({
         positions: userPositions || [],
         availableVaults: topVaults,
@@ -158,13 +166,17 @@ function NoPositionsState({ onGoToVaults }) {
 }
 
 function PositionCard({ position, allVaults }) {
+  // Try to find a matching vault from our sane vault list for APY display
   const matchingVault = allVaults.find((v) =>
     v.underlyingTokens?.some((t) => t.symbol === position.asset?.symbol)
   )
-  const score = matchingVault ? computeStabilityScore(matchingVault) : null
-  const bestApy = allVaults[0]?.analytics?.apy?.total || 0
-  const currentApy = matchingVault?.analytics?.apy?.total || 0
-  const tag = getHealthTag(score, currentApy, bestApy)
+  const bestApy = allVaults[0]?.analytics?.apy?.total ?? 0
+  const currentApy = matchingVault?.analytics?.apy?.total ?? null
+  const tag = getHealthTag(currentApy, bestApy)
+
+  const apyDisplay = currentApy != null
+    ? `${(currentApy * 100).toFixed(2)}%`
+    : 'N/A'
 
   return (
     <div className="bg-surface-container-lowest p-6 rounded-xl clinical-shadow hover:bg-surface-container-low transition-colors">
@@ -186,7 +198,7 @@ function PositionCard({ position, allVaults }) {
         </div>
         <div className="text-right">
           <span className="block text-2xl font-headline font-black text-on-surface">
-            {currentApy > 0 ? `${(currentApy * 100).toFixed(2)}%` : 'N/A'}
+            {apyDisplay}
           </span>
           <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">
             Current APY
@@ -194,7 +206,7 @@ function PositionCard({ position, allVaults }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6 mb-4">
+      <div className="grid grid-cols-2 gap-6">
         <div>
           <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">
             Balance
@@ -212,29 +224,6 @@ function PositionCard({ position, allVaults }) {
           </span>
         </div>
       </div>
-
-      {score !== null && (
-        <div>
-          <div className="flex justify-between text-[10px] font-bold text-on-surface-variant mb-1">
-            <span>Stability Score</span>
-            <span>{Math.round(score * 100)}%</span>
-          </div>
-          <div className="h-2 bg-surface-container rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-700"
-              style={{
-                width: `${Math.round(score * 100)}%`,
-                backgroundColor:
-                  score > 0.7
-                    ? '#009844'
-                    : score > 0.4
-                    ? '#f59e0b'
-                    : '#ba1a1a',
-              }}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -280,12 +269,11 @@ function AlternativesTable({ vaults }) {
           Recommended Vaults
         </h3>
         <p className="text-xs text-on-surface-variant">
-          Ranked by stability-adjusted APY
+          Highest verified APY · TVL &gt; $500k
         </p>
       </div>
       <div className="divide-y divide-surface-container">
         {vaults.slice(0, 5).map((vault, i) => {
-          const score = computeStabilityScore(vault)
           const apy =
             vault.analytics.apy.total != null
               ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
@@ -301,13 +289,8 @@ function AlternativesTable({ vaults }) {
                 </p>
                 <p className="text-xs text-on-surface-variant">
                   {vault.protocol.name} · TVL $
-                  {Number(vault.analytics.tvl.usd).toLocaleString()}
+                  {(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M
                 </p>
-                {score !== null && (
-                  <p className="text-[10px] text-on-surface-variant mt-0.5">
-                    Stability: {Math.round(score * 100)}%
-                  </p>
-                )}
               </div>
               <span className="font-bold text-on-tertiary-container">{apy}</span>
             </div>
