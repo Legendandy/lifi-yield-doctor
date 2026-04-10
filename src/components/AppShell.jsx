@@ -14,14 +14,13 @@ export default function AppShell({ children }) {
 
   const navItems = [
     { path: '/dashboard', icon: 'dashboard', label: 'Dashboard' },
-    { path: '/vaults', icon: 'account_balance', label: 'Vaults' },      // ← Vault in sidebar
-    { path: '/health', icon: 'monitor_heart', label: 'Health Monitor' },
-    { path: '/stability', icon: 'balance', label: 'Stability Index' },
+    { path: '/vaults', icon: 'account_balance', label: 'Vaults' },
+    { path: '/compare', icon: 'compare_arrows', label: 'Compare APY' },
   ]
 
   return (
     <div className="bg-background text-on-surface font-body min-h-screen">
-      {/* TOP HEADER — only Yield Doctor logo + wallet address */}
+      {/* TOP HEADER */}
       <nav className="fixed top-0 w-full z-50 flex justify-between items-center px-8 h-16 bg-white/80 backdrop-blur-md shadow-sm">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center text-white">
@@ -31,7 +30,6 @@ export default function AppShell({ children }) {
             Yield Doctor
           </span>
         </div>
-        {/* ONLY wallet address — no nav links in header */}
         <div className="flex items-center gap-3">
           <span className="text-sm font-mono text-on-surface-variant bg-surface-container px-3 py-1.5 rounded-full">
             {shortAddr}
@@ -78,7 +76,10 @@ export default function AppShell({ children }) {
         </nav>
 
         <div className="mt-auto space-y-1">
-          <button className="w-full mb-4 py-3 px-4 bg-primary-container text-white rounded-full font-bold text-sm shadow-md flex items-center justify-center gap-2">
+          <button
+            onClick={() => navigate('/vaults')}
+            className="w-full mb-4 py-3 px-4 bg-primary-container text-white rounded-full font-bold text-sm shadow-md flex items-center justify-center gap-2"
+          >
             <span className="material-symbols-outlined text-[18px]">add_circle</span>
             Run New Diagnosis
           </button>

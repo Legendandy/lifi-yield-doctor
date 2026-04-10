@@ -5,8 +5,7 @@ import { useAccount } from 'wagmi'
 import HomePage from './pages/HomePage'
 import DashboardPage from './pages/DashboardPage'
 import VaultPage from './pages/VaultPage'
-import HealthMonitorPage from './pages/HealthMonitorPage'
-import StabilityIndexPage from './pages/StabilityIndexPage'
+import CompareApyPage from './pages/CompareApyPage'
 
 function AuthGuard({ children }) {
   const { isConnected } = useAccount()
@@ -18,7 +17,6 @@ function HomeRedirect() {
   const { isConnected } = useAccount()
   const navigate = useNavigate()
 
-  // KEY REQUIREMENT: Auto-redirect to dashboard when wallet connects
   useEffect(() => {
     if (isConnected) {
       navigate('/dashboard', { replace: true })
@@ -38,11 +36,8 @@ export default function App() {
       <Route path="/vaults" element={
         <AuthGuard><VaultPage /></AuthGuard>
       } />
-      <Route path="/health" element={
-        <AuthGuard><HealthMonitorPage /></AuthGuard>
-      } />
-      <Route path="/stability" element={
-        <AuthGuard><StabilityIndexPage /></AuthGuard>
+      <Route path="/compare" element={
+        <AuthGuard><CompareApyPage /></AuthGuard>
       } />
     </Routes>
   )

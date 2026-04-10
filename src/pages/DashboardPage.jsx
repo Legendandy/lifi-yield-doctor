@@ -3,10 +3,10 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
-import { getPortfolioPositions, getVaults } from '../services/earnApi'
+import { getPortfolioPositions, getVaults, getBestVaultAcrossAllChains } from '../services/earnApi'
 import { getDiagnosis } from '../services/aiDiagnosis'
+import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
 
-// Health label based on APY competitiveness vs top vault
 function getHealthTag(currentApy, bestAvailableApy) {
   if (currentApy == null || bestAvailableApy == null) return { label: 'Unknown', color: '#76777d' }
   const isUnderperforming = bestAvailableApy > currentApy * 1.2
@@ -14,42 +14,64 @@ function getHealthTag(currentApy, bestAvailableApy) {
   return { label: '🟢 Healthy', color: '#22c55e' }
 }
 
+function formatTimeRemaining(ms) {
+  if (!ms || ms <= 0) return null
+  const mins = Math.floor(ms / 60000)
+  const secs = Math.floor((ms % 60000) / 1000)
+  if (mins > 0) return `${mins}m ${secs}s`
+  return `${secs}s`
+}
+
 export default function DashboardPage() {
   const { address } = useAccount()
   const navigate = useNavigate()
   const [positions, setPositions] = useState([])
   const [vaults, setVaults] = useState([])
+  const [bestCrossChain, setBestCrossChain] = useState(null)
   const [diagnosis, setDiagnosis] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [hasPositions, setHasPositions] = useState(false)
+  const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
 
   useEffect(() => {
     if (!address) return
     loadData()
   }, [address])
 
+  // Update cache countdown every 10s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const remaining = getCacheExpiresIn(CACHE_KEYS.allChainsBest)
+      setCacheExpiresIn(remaining)
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [])
+
   async function loadData() {
     setLoading(true)
     setError(null)
     try {
-      const userPositions = await getPortfolioPositions(address)
+      const [userPositions, topVaults, bestVault] = await Promise.all([
+        getPortfolioPositions(address),
+        getVaults({ sortBy: 'apy', minTvlUsd: 500_000, limit: 10 }),
+        getBestVaultAcrossAllChains(),
+      ])
+
       const hasAny = userPositions && userPositions.length > 0
       setHasPositions(hasAny)
       setPositions(userPositions || [])
-
-      // Fetch safe, high-quality vaults — sanity filter handles bad data
-      const topVaults = await getVaults({
-        sortBy: 'apy',
-        minTvlUsd: 500_000,
-        limit: 10,
-      })
       setVaults(topVaults)
+      setBestCrossChain(bestVault)
+
+      const remaining = getCacheExpiresIn(CACHE_KEYS.allChainsBest)
+      setCacheExpiresIn(remaining)
 
       const aiText = await getDiagnosis({
         positions: userPositions || [],
         availableVaults: topVaults,
         isNewUser: !hasAny,
+        bestCrossChainVault: bestVault,
       })
       setDiagnosis(aiText)
     } catch (err) {
@@ -72,11 +94,18 @@ export default function DashboardPage() {
             Real-time clinical monitoring of active vaults.
           </p>
         </div>
-        {!loading && !error && (
-          <span className="px-3 py-1 bg-surface-container-high rounded-full text-[10px] font-bold uppercase tracking-wider text-on-secondary-container">
-            {positions.length} Active Vault{positions.length !== 1 ? 's' : ''}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {cacheExpiresIn != null && (
+            <span className="text-[10px] text-on-surface-variant font-medium">
+              Data refreshes in {formatTimeRemaining(cacheExpiresIn)}
+            </span>
+          )}
+          {!loading && !error && (
+            <span className="px-3 py-1 bg-surface-container-high rounded-full text-[10px] font-bold uppercase tracking-wider text-on-secondary-container">
+              {positions.length} Active Vault{positions.length !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
       </header>
 
       {error && (
@@ -104,6 +133,9 @@ export default function DashboardPage() {
           {/* RIGHT: Yield Health Report */}
           <section className="col-span-12 lg:col-span-5 space-y-6">
             <DiagnosisSummary diagnosis={diagnosis} loading={loading} />
+            {bestCrossChain && (
+              <BestCrossChainCard vault={bestCrossChain} />
+            )}
             {hasPositions && vaults.length > 0 && (
               <AlternativesTable vaults={vaults} />
             )}
@@ -124,6 +156,7 @@ function LoadingSkeleton() {
       </div>
       <div className="col-span-5 space-y-4">
         <div className="h-48 bg-surface-container rounded-xl" />
+        <div className="h-32 bg-surface-container rounded-xl" />
         <div className="h-64 bg-surface-container rounded-xl" />
       </div>
     </div>
@@ -222,6 +255,40 @@ function DiagnosisSummary({ diagnosis, loading }) {
         ) : (
           diagnosis || 'No diagnosis available.'
         )}
+      </div>
+    </div>
+  )
+}
+
+// Card showing the single best vault found across all chains
+function BestCrossChainCard({ vault }) {
+  const apy = vault.analytics?.apy?.total != null
+    ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
+    : 'N/A'
+  const chainName = vault._chainName ?? vault.network ?? `Chain ${vault.chainId}`
+  const tvlM = Number(vault.analytics?.tvl?.usd ?? 0) >= 1_000_000
+    ? `$${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M`
+    : `$${(Number(vault.analytics?.tvl?.usd ?? 0) / 1000).toFixed(0)}K`
+
+  return (
+    <div className="bg-tertiary-container/10 border border-on-tertiary-container/20 p-5 rounded-xl">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="material-symbols-outlined text-on-tertiary-container text-[18px]">verified</span>
+        <span className="text-[10px] font-black uppercase tracking-widest text-on-tertiary-container">
+          Best Vault Across All Chains
+        </span>
+      </div>
+      <div className="flex justify-between items-start">
+        <div>
+          <p className="font-headline font-bold text-on-surface text-base leading-tight">{vault.name}</p>
+          <p className="text-xs text-on-surface-variant mt-0.5">
+            {vault.protocol?.name} · {chainName} · TVL {tvlM}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-headline font-black text-on-tertiary-container">{apy}</p>
+          <p className="text-[10px] text-on-surface-variant font-bold uppercase">APY</p>
+        </div>
       </div>
     </div>
   )

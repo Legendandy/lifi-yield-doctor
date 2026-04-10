@@ -1,4 +1,6 @@
 // src/services/earnApi.js
+import { getCached, setCached, CACHE_KEYS } from './vaultCache'
+
 const BASE = '/earn-api'
 const API_KEY = import.meta.env.VITE_LIFI_API_KEY
 
@@ -18,65 +20,37 @@ async function safeFetch(url) {
 }
 
 // ─── Relaxed Sanity Filter ────────────────────────────────────────────────────
-// We only exclude truly impossible data — extreme spikes with zero history.
-// Vaults missing 30d data are still valid (e.g. newly launched vaults).
-// Ethereum vaults often lack 30d rolling data — we must not exclude them.
-
-const ABSOLUTE_MAX_APY = 5.0  // 500% — anything above is a data error
-const MIN_TVL_FOR_DISPLAY = 10_000 // $10k minimum — very permissive
+const ABSOLUTE_MAX_APY = 5.0
+const MIN_TVL_FOR_DISPLAY = 10_000
 
 export function isVaultSane(vault) {
   const apy = vault?.analytics?.apy?.total
   const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
   const apy30d = vault?.analytics?.apy30d
 
-  // Must have a real, numeric APY
   if (apy == null || typeof apy !== 'number') return false
-
-  // Must be non-negative (0% APY vaults are valid — they still exist)
   if (apy < 0) return false
-
-  // Hard cap: above 500% is almost certainly a data error
   if (apy > ABSOLUTE_MAX_APY) return false
 
-  // If 30d data exists, check for extreme divergence (ratio > 10x)
-  // This catches ephemeral spikes but allows normally high-APY vaults
   if (apy30d != null && apy30d > 0) {
     const ratio = apy / apy30d
     if (ratio > 10 || ratio < 0.05) return false
   }
 
-  // Minimum liquidity
   if (tvl < MIN_TVL_FOR_DISPLAY) return false
 
   return true
 }
 
 // ─── Vault Ranking Score ──────────────────────────────────────────────────────
-// Composite score that balances APY and TVL.
-// We don't just sort by APY because a 200% APY on $10k TVL is less useful
-// than a 15% APY on $100M TVL. The score blends both dimensions.
-//
-// Formula:
-//   apyScore  = normalized APY (sigmoid-like, caps around 50%)
-//   tvlScore  = log-normalized TVL (rewards large TVL but with diminishing returns)
-//   stability = bonus if 30d avg is close to current APY (consistent vault)
-//
-// Weights: APY 50%, TVL 35%, Stability 15%
-
 export function computeVaultRankScore(vault) {
   const apy = vault?.analytics?.apy?.total ?? 0
   const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
   const apy30d = vault?.analytics?.apy30d
 
-  // APY score: use sqrt to compress extreme values. 50% APY ≈ score 0.7
-  // This means a vault at 5% vs 50% isn't 10x better in score — more like 3x
   const apyScore = Math.min(Math.sqrt(apy / 0.5), 1)
-
-  // TVL score: log scale. $1M = 0.5, $100M = ~1.0
   const tvlScore = tvl > 0 ? Math.min(Math.log10(tvl / 10000) / 4, 1) : 0
 
-  // Stability bonus: if 30d avg exists and is within 30% of current APY
   let stabilityBonus = 0
   if (apy30d != null && apy30d > 0 && apy > 0) {
     const ratio = Math.abs(apy - apy30d) / apy30d
@@ -86,10 +60,12 @@ export function computeVaultRankScore(vault) {
   return apyScore * 0.50 + tvlScore * 0.35 + stabilityBonus
 }
 
-// ─── Fetch vaults for a specific chain with full pagination ───────────────────
-// Fetches ALL pages for a given chainId, applies relaxed sanity filter,
-// then returns vaults sorted by composite rank score.
+// ─── Fetch vaults for a specific chain with caching ───────────────────────────
 export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
+  const cacheKey = CACHE_KEYS.chainVaults(chainId)
+  const cached = getCached(cacheKey)
+  if (cached) return cached
+
   const all = []
   let cursor = undefined
   let pages = 0
@@ -121,18 +97,49 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
     if (!cursor || page.length === 0) break
   }
 
-  // Sort by composite rank score (best first)
-  return all.sort((a, b) => computeVaultRankScore(b) - computeVaultRankScore(a))
+  const sorted = all.sort((a, b) => computeVaultRankScore(b) - computeVaultRankScore(a))
+  setCached(cacheKey, sorted)
+  return sorted
 }
 
-// ─── Paginated fetch (for VaultPage UI pagination) ────────────────────────────
-// Returns a page of pre-ranked vaults + total count
+// ─── Fetch best vault across ALL chains ──────────────────────────────────────
+// Used by the AI diagnosis to give a specific cross-chain recommendation
+export async function getBestVaultAcrossAllChains() {
+  const cacheKey = CACHE_KEYS.allChainsBest
+  const cached = getCached(cacheKey)
+  if (cached) return cached
+
+  // Get chains first
+  const chains = await getSupportedChains()
+
+  // Fetch top vaults from first 5 chains in parallel (to avoid too many requests)
+  const topChains = chains.slice(0, 5)
+  const results = await Promise.allSettled(
+    topChains.map(chain =>
+      getVaultsForChain({ chainId: chain.chainId, maxPages: 3 })
+        .then(vaults => vaults.slice(0, 5).map(v => ({ ...v, _chainName: chain.name })))
+    )
+  )
+
+  const allTopVaults = results
+    .filter(r => r.status === 'fulfilled')
+    .flatMap(r => r.value)
+
+  const sorted = allTopVaults.sort(
+    (a, b) => computeVaultRankScore(b) - computeVaultRankScore(a)
+  )
+
+  const best = sorted[0] ?? null
+  setCached(cacheKey, best)
+  return best
+}
+
+// ─── Paginated fetch ──────────────────────────────────────────────────────────
 export async function getVaultsPaged({
   chainId,
   pageSize = 20,
-  pageIndex = 0, // 0-based
+  pageIndex = 0,
 } = {}) {
-  // Fetch all ranked vaults for this chain (cached conceptually in caller)
   const all = await getVaultsForChain({ chainId })
   const start = pageIndex * pageSize
   const end = start + pageSize
@@ -143,7 +150,7 @@ export async function getVaultsPaged({
   }
 }
 
-// ─── Legacy helpers (used by Dashboard and Health Monitor) ───────────────────
+// ─── Legacy helpers ───────────────────────────────────────────────────────────
 export async function getVaults({
   chainId,
   asset,
@@ -181,7 +188,13 @@ export async function getPortfolioPositions(userAddress) {
 }
 
 export async function getSupportedChains() {
-  return safeFetch(`${BASE}/v1/earn/chains`)
+  const cacheKey = CACHE_KEYS.chains
+  const cached = getCached(cacheKey)
+  if (cached) return cached
+
+  const data = await safeFetch(`${BASE}/v1/earn/chains`)
+  setCached(cacheKey, data)
+  return data
 }
 
 export async function getProtocols() {
