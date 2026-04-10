@@ -1,10 +1,15 @@
-const COMPOSER_BASE_URL = 'https://li.quest'
+// src/services/composerApi.js
+// Uses Vite dev proxy (/lifi-api → https://li.quest) to avoid CORS issues
+const BASE = '/lifi-api'
 
-// Get a deposit quote from Composer
-// fromToken: the token the user holds (e.g. USDC address)
-// toToken: the vault contract address
-// fromAmount: amount in smallest unit (mind decimals!)
-export async function getDepositQuote({ fromChain, toChain, fromToken, toToken, fromAddress, fromAmount }) {
+export async function getDepositQuote({
+  fromChain,
+  toChain,
+  fromToken,
+  toToken,
+  fromAddress,
+  fromAmount,
+}) {
   const params = new URLSearchParams({
     fromChain: String(fromChain),
     toChain: String(toChain),
@@ -15,17 +20,21 @@ export async function getDepositQuote({ fromChain, toChain, fromToken, toToken, 
     fromAmount: String(fromAmount),
   })
 
-  const res = await fetch(`${COMPOSER_BASE_URL}/v1/quote?${params}`)
-  return res.json() // contains transactionRequest + estimate.approvalAddress
+  const res = await fetch(`${BASE}/v1/quote?${params}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`Quote API ${res.status}: ${text}`)
+  }
+  return res.json()
 }
 
-// Poll status for cross-chain transactions
 export async function getTransactionStatus(txHash, fromChain, toChain) {
   const params = new URLSearchParams({
     txHash,
     fromChain: String(fromChain),
     toChain: String(toChain),
   })
-  const res = await fetch(`${COMPOSER_BASE_URL}/v1/status?${params}`)
+  const res = await fetch(`${BASE}/v1/status?${params}`)
+  if (!res.ok) throw new Error(`Status API ${res.status}`)
   return res.json()
 }

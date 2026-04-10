@@ -1,8 +1,7 @@
 // src/services/aiDiagnosis.js
-const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY
+const FIREWORKS_API_KEY = import.meta.env.VITE_FIREWORKS_API_KEY
 
 export async function getDiagnosis({ positions, availableVaults, isNewUser }) {
-  // Build data-grounded context — AI can ONLY reference numbers that appear here
   const positionSummary = isNewUser
     ? 'User has no active vault positions.'
     : positions.map(p =>
@@ -36,16 +35,14 @@ ${isNewUser
 
 Be specific, grounded, and concise.`
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch('https://api.fireworks.ai/inference/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
+      'Authorization': `Bearer ${FIREWORKS_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'accounts/fireworks/models/qwen3-vl-30b-a3b-instruct',
       max_tokens: 300,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -53,5 +50,5 @@ Be specific, grounded, and concise.`
 
   if (!response.ok) throw new Error(`AI API error: ${response.status}`)
   const data = await response.json()
-  return data.content[0].text
+  return data.choices[0].message.content
 }
