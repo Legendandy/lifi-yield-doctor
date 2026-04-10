@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
+import DepositModal from '../components/DepositModal'
+import WithdrawModal from '../components/WithdrawModal'
 import { getPortfolioPositions, getVaults, getBestVaultAcrossAllChains } from '../services/earnApi'
 import { getDiagnosis } from '../services/aiDiagnosis'
 import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
@@ -34,12 +36,15 @@ export default function DashboardPage() {
   const [hasPositions, setHasPositions] = useState(false)
   const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
 
+  // Modal state
+  const [depositModal, setDepositModal] = useState(null)
+  const [withdrawModal, setWithdrawModal] = useState(null)
+
   useEffect(() => {
     if (!address) return
     loadData()
   }, [address])
 
-  // Update cache countdown every 10s
   useEffect(() => {
     const interval = setInterval(() => {
       const remaining = getCacheExpiresIn(CACHE_KEYS.allChainsBest)
@@ -125,7 +130,13 @@ export default function DashboardPage() {
               <NoPositionsState onGoToVaults={() => navigate('/vaults')} />
             ) : (
               positions.map((pos, i) => (
-                <PositionCard key={i} position={pos} allVaults={vaults} />
+                <PositionCard
+                  key={i}
+                  position={pos}
+                  allVaults={vaults}
+                  onDeposit={(vault) => setDepositModal(vault)}
+                  onWithdraw={(vault, position) => setWithdrawModal({ vault, position })}
+                />
               ))
             )}
           </section>
@@ -134,13 +145,45 @@ export default function DashboardPage() {
           <section className="col-span-12 lg:col-span-5 space-y-6">
             <DiagnosisSummary diagnosis={diagnosis} loading={loading} />
             {bestCrossChain && (
-              <BestCrossChainCard vault={bestCrossChain} />
+              <BestCrossChainCard
+                vault={bestCrossChain}
+                onDeposit={() => setDepositModal(bestCrossChain)}
+              />
             )}
             {hasPositions && vaults.length > 0 && (
-              <AlternativesTable vaults={vaults} />
+              <AlternativesTable
+                vaults={vaults}
+                onDeposit={(vault) => setDepositModal(vault)}
+              />
             )}
           </section>
         </div>
+      )}
+
+      {/* Deposit Modal */}
+      {depositModal && (
+        <DepositModal
+          vault={depositModal}
+          onClose={() => setDepositModal(null)}
+          onSuccess={() => {
+            setDepositModal(null)
+            // Refresh data after deposit
+            setTimeout(() => loadData(), 2000)
+          }}
+        />
+      )}
+
+      {/* Withdraw Modal */}
+      {withdrawModal && (
+        <WithdrawModal
+          vault={withdrawModal.vault}
+          position={withdrawModal.position}
+          onClose={() => setWithdrawModal(null)}
+          onSuccess={() => {
+            setWithdrawModal(null)
+            setTimeout(() => loadData(), 2000)
+          }}
+        />
       )}
     </AppShell>
   )
@@ -183,7 +226,7 @@ function NoPositionsState({ onGoToVaults }) {
   )
 }
 
-function PositionCard({ position, allVaults }) {
+function PositionCard({ position, allVaults, onDeposit, onWithdraw }) {
   const matchingVault = allVaults.find((v) =>
     v.underlyingTokens?.some((t) => t.symbol === position.asset?.symbol)
   )
@@ -194,6 +237,20 @@ function PositionCard({ position, allVaults }) {
   const apyDisplay = currentApy != null
     ? `${(currentApy * 100).toFixed(2)}%`
     : 'N/A'
+
+  // Build a vault object for the modals — use matchingVault or synthesize from position
+  const vaultForModal = matchingVault ?? {
+    name: `${position.asset?.symbol ?? 'Unknown'} Vault`,
+    protocol: { name: position.protocolName ?? 'Unknown' },
+    network: `Chain ${position.chainId}`,
+    chainId: position.chainId,
+    address: position.vaultAddress ?? position.address ?? '',
+    analytics: {
+      apy: { total: currentApy },
+      tvl: { usd: 0 },
+    },
+    underlyingTokens: position.asset ? [position.asset] : [],
+  }
 
   return (
     <div className="bg-surface-container-lowest p-6 rounded-xl clinical-shadow hover:bg-surface-container-low transition-colors">
@@ -217,7 +274,7 @@ function PositionCard({ position, allVaults }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-2 gap-6 mb-4">
         <div>
           <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Balance</span>
           <span className="text-lg font-bold text-on-surface">
@@ -228,6 +285,24 @@ function PositionCard({ position, allVaults }) {
           <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Health</span>
           <span className="text-sm font-bold" style={{ color: tag.color }}>{tag.label}</span>
         </div>
+      </div>
+
+      {/* Deposit + Withdraw buttons */}
+      <div className="flex gap-2 pt-2 border-t border-surface-container">
+        <button
+          onClick={() => onDeposit(vaultForModal)}
+          className="flex-1 py-2 rounded-xl text-xs font-black bg-primary-container text-white hover:opacity-90 transition-all flex items-center justify-center gap-1.5"
+        >
+          <span className="material-symbols-outlined text-[14px]">add_circle</span>
+          Deposit More
+        </button>
+        <button
+          onClick={() => onWithdraw(vaultForModal, position)}
+          className="flex-1 py-2 rounded-xl text-xs font-black border-2 border-surface-container-high text-on-surface-variant hover:border-error hover:text-error transition-all flex items-center justify-center gap-1.5"
+        >
+          <span className="material-symbols-outlined text-[14px]">remove_circle</span>
+          Withdraw
+        </button>
       </div>
     </div>
   )
@@ -260,8 +335,7 @@ function DiagnosisSummary({ diagnosis, loading }) {
   )
 }
 
-// Card showing the single best vault found across all chains
-function BestCrossChainCard({ vault }) {
+function BestCrossChainCard({ vault, onDeposit }) {
   const apy = vault.analytics?.apy?.total != null
     ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
     : 'N/A'
@@ -278,7 +352,7 @@ function BestCrossChainCard({ vault }) {
           Best Vault Across All Chains
         </span>
       </div>
-      <div className="flex justify-between items-start">
+      <div className="flex justify-between items-start mb-4">
         <div>
           <p className="font-headline font-bold text-on-surface text-base leading-tight">{vault.name}</p>
           <p className="text-xs text-on-surface-variant mt-0.5">
@@ -290,11 +364,18 @@ function BestCrossChainCard({ vault }) {
           <p className="text-[10px] text-on-surface-variant font-bold uppercase">APY</p>
         </div>
       </div>
+      <button
+        onClick={onDeposit}
+        className="w-full py-2 rounded-xl text-xs font-black bg-on-tertiary-container text-white hover:opacity-90 transition-all flex items-center justify-center gap-1.5"
+      >
+        <span className="material-symbols-outlined text-[14px]">add_circle</span>
+        Deposit in This Vault
+      </button>
     </div>
   )
 }
 
-function AlternativesTable({ vaults }) {
+function AlternativesTable({ vaults, onDeposit }) {
   return (
     <div className="bg-surface-container-lowest rounded-xl clinical-shadow">
       <div className="p-4 border-b border-surface-container">
@@ -314,7 +395,15 @@ function AlternativesTable({ vaults }) {
                   {vault.protocol.name} · TVL ${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M
                 </p>
               </div>
-              <span className="font-bold text-on-tertiary-container">{apy}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-on-tertiary-container">{apy}</span>
+                <button
+                  onClick={() => onDeposit(vault)}
+                  className="px-3 py-1 rounded-full text-[10px] font-black bg-primary-container/10 text-primary-container hover:bg-primary-container hover:text-white transition-all border border-primary-container/20"
+                >
+                  Deposit
+                </button>
+              </div>
             </div>
           )
         })}

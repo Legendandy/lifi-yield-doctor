@@ -1,13 +1,15 @@
-// src/pages/ComparePage.jsx
-import { useState, useEffect, useCallback } from 'react'
+// src/pages/CompareApyPage.jsx
+import { useState, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
 import {
   getPortfolioPositions,
   getVaults,
   getSupportedChains,
+  getVaultsForChain,
   computeVaultRankScore,
 } from '../services/earnApi'
+import { executeDeposit } from '../services/executeDeposit'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(val, decimals = 2) {
@@ -29,12 +31,11 @@ function VaultSelector({ label, address, onSelect }) {
   const [chains, setChains] = useState([])
   const [selectedChain, setSelectedChain] = useState(null)
   const [vaults, setVaults] = useState([])
-  const [step, setStep] = useState('loading') // loading | pick-position | pick-chain | pick-vault | done
+  const [step, setStep] = useState('loading')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
 
-  // Boot: check positions
   useEffect(() => {
     if (!address) { setStep('pick-chain'); loadChains(); return }
     setStep('loading')
@@ -67,7 +68,9 @@ function VaultSelector({ label, address, onSelect }) {
     setVaults([])
     setSearch('')
     try {
-      const data = await getVaults({ chainId: chain.chainId, limit: 100, minTvlUsd: 10_000 })
+      // Use getVaultsForChain which handles pagination and caching properly
+      // This fixes the Ethereum issue where getVaults with limit=100 may miss many vaults
+      const data = await getVaultsForChain({ chainId: chain.chainId, maxPages: 5 })
       setVaults(data)
       setStep('pick-vault')
     } catch (e) {
@@ -78,7 +81,6 @@ function VaultSelector({ label, address, onSelect }) {
   }
 
   function handlePositionSelect(pos) {
-    // Position object may not have full vault data — we synthesize a minimal vault
     const synth = {
       name: `${pos.asset?.symbol ?? 'Unknown'} Vault`,
       protocol: { name: pos.protocolName ?? 'Unknown' },
@@ -116,7 +118,6 @@ function VaultSelector({ label, address, onSelect }) {
       v.underlyingTokens?.some((t) => t.symbol.toLowerCase().includes(search.toLowerCase()))
   )
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   const cardBase =
     'bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container p-6 space-y-4'
 
@@ -133,10 +134,7 @@ function VaultSelector({ label, address, onSelect }) {
     )
   }
 
-  if (step === 'done') {
-    // should not render — parent hides this when vault is selected
-    return null
-  }
+  if (step === 'done') return null
 
   return (
     <div className={cardBase}>
@@ -148,7 +146,6 @@ function VaultSelector({ label, address, onSelect }) {
         </p>
       )}
 
-      {/* STEP: pick from active positions */}
       {step === 'pick-position' && (
         <div className="space-y-3">
           <p className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
@@ -194,7 +191,6 @@ function VaultSelector({ label, address, onSelect }) {
         </div>
       )}
 
-      {/* STEP: pick chain */}
       {step === 'pick-chain' && (
         <div className="space-y-3">
           <p className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
@@ -227,7 +223,6 @@ function VaultSelector({ label, address, onSelect }) {
         </div>
       )}
 
-      {/* STEP: pick vault */}
       {step === 'pick-vault' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -251,7 +246,6 @@ function VaultSelector({ label, address, onSelect }) {
             </div>
           ) : (
             <>
-              {/* Search */}
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-[16px] text-on-surface-variant">
                   search
@@ -372,32 +366,18 @@ function SelectedVaultChip({ vault, label, onClear }) {
   )
 }
 
-// ─── Comparison Panel ─────────────────────────────────────────────────────────
-function WinBadge({ wins }) {
-  if (!wins) return null
-  return (
-    <div className="flex flex-col items-center justify-center py-2">
-      <div className="px-2.5 py-1 bg-on-tertiary-container/10 rounded-full">
-        <span className="text-[10px] font-black text-on-tertiary-container uppercase tracking-widest">
-          ▲ BETTER
-        </span>
-      </div>
-    </div>
-  )
-}
-
+// ─── Comparison Row ────────────────────────────────────────────────────────────
 function ComparisonRow({ metricLabel, valA, valB, winA, winB, icon }) {
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 py-3 border-b border-surface-container last:border-0">
-      {/* Vault A value */}
-      <div className="text-right space-y-0.5">
+      <div className="text-right">
         <p className={`font-headline font-black text-lg leading-none ${winA ? 'text-on-tertiary-container' : 'text-on-surface'}`}>
           {valA}
         </p>
-        {winA && <WinBadge wins />}
+        {winA && (
+          <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>
+        )}
       </div>
-
-      {/* Center label */}
       <div className="flex flex-col items-center gap-1 px-4">
         {icon && (
           <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{icon}</span>
@@ -406,19 +386,22 @@ function ComparisonRow({ metricLabel, valA, valB, winA, winB, icon }) {
           {metricLabel}
         </p>
       </div>
-
-      {/* Vault B value */}
-      <div className="text-left space-y-0.5">
+      <div className="text-left">
         <p className={`font-headline font-black text-lg leading-none ${winB ? 'text-on-tertiary-container' : 'text-on-surface'}`}>
           {valB}
         </p>
-        {winB && <WinBadge wins />}
+        {winB && (
+          <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>
+        )}
       </div>
     </div>
   )
 }
 
-function ComparisonPanel({ vaultA, vaultB, onClose }) {
+// ─── Comparison Panel ─────────────────────────────────────────────────────────
+function ComparisonPanel({ vaultA, vaultB, onClose, userAddress }) {
+  const [depositing, setDepositing] = useState(null)
+
   if (!vaultA || !vaultB) return null
 
   const apyA = vaultA.analytics?.apy?.total
@@ -430,7 +413,6 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
   const scoreA = computeVaultRankScore(vaultA)
   const scoreB = computeVaultRankScore(vaultB)
 
-  // Win conditions
   const apyWinA = apyA != null && apyB != null && apyA > apyB
   const apyWinB = apyA != null && apyB != null && apyB > apyA
   const apy30WinA = apy30A != null && apy30B != null && apy30A > apy30B
@@ -440,26 +422,49 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
   const scoreWinA = scoreA > scoreB
   const scoreWinB = scoreB > scoreA
 
-  // Count wins
   const winsA = [apyWinA, apy30WinA, tvlWinA, scoreWinA].filter(Boolean).length
   const winsB = [apyWinB, apy30WinB, tvlWinB, scoreWinB].filter(Boolean).length
 
-  // Annual gain on $10k deposit
   const annualGain =
     apyA != null && apyB != null
       ? Math.abs((apyA - apyB) * 10_000)
       : null
-  const betterVault = apyA != null && apyB != null && apyA > apyB ? 'Vault A' : 'Vault B'
   const apyDiff =
     apyA != null && apyB != null
       ? Math.abs((apyA - apyB) * 100).toFixed(2)
       : null
 
+  // Which vault is the winner and recommended for deposit?
+  const winnerVault = winsA > winsB ? vaultA : winsB > winsA ? vaultB : apyWinA ? vaultA : vaultB
+  const winnerLabel = winnerVault === vaultA ? 'Vault A' : 'Vault B'
+  const isTie = winsA === winsB && apyA === apyB
+
   const tokenA = vaultA.underlyingTokens?.map((t) => t.symbol).join(', ') || '—'
   const tokenB = vaultB.underlyingTokens?.map((t) => t.symbol).join(', ') || '—'
 
+  async function handleDeposit(vault, label) {
+    if (!vault.underlyingTokens?.length) {
+      alert('No underlying token info available for this vault.')
+      return
+    }
+    setDepositing(label)
+    try {
+      await executeDeposit({
+        vault,
+        fromToken: vault.underlyingTokens[0],
+        fromAmount: '1000000',
+        userAddress,
+      })
+      alert('Deposit transaction sent!')
+    } catch (err) {
+      alert(`Deposit failed: ${err.message}`)
+    } finally {
+      setDepositing(null)
+    }
+  }
+
   return (
-    <div className="bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container overflow-hidden animate-in">
+    <div className="bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container overflow-hidden">
       {/* Header */}
       <div className="px-6 py-4 border-b border-surface-container flex items-center justify-between bg-surface-container-low">
         <div>
@@ -476,17 +481,14 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
         </button>
       </div>
 
-      {/* Vault headers */}
+      {/* Vault headers — no wins badges */}
       <div className="grid grid-cols-[1fr_auto_1fr] gap-0">
-        {/* Vault A header */}
         <div className="p-6 border-r border-surface-container space-y-2">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-primary-container/10 flex items-center justify-center">
               <span className="material-symbols-outlined text-primary-container text-[16px]">looks_one</span>
             </div>
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Vault A · {vaultA.network}</p>
-            </div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Vault A · {vaultA.network}</p>
           </div>
           <h3 className="font-headline font-bold text-base text-on-surface leading-snug">{vaultA.name}</h3>
           <div className="flex flex-wrap gap-1">
@@ -495,25 +497,17 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
           </div>
         </div>
 
-        {/* Wins badge center */}
-        <div className="flex flex-col items-center justify-center px-4 border-r border-surface-container">
-          <div className="text-center space-y-1">
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-lg ${winsA > winsB ? 'bg-on-tertiary-container text-white' : 'bg-surface-container text-on-surface-variant'}`}>
-              {winsA}
-            </div>
-            <p className="text-[8px] font-black uppercase tracking-widest text-on-surface-variant">Wins</p>
-          </div>
+        {/* Center divider — just a VS */}
+        <div className="flex flex-col items-center justify-center px-5">
+          <span className="text-xs font-black text-on-surface-variant uppercase tracking-widest">VS</span>
         </div>
 
-        {/* Vault B header */}
         <div className="p-6 space-y-2">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-on-tertiary-container/10 flex items-center justify-center">
               <span className="material-symbols-outlined text-on-tertiary-container text-[16px]">looks_two</span>
             </div>
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Vault B · {vaultB.network}</p>
-            </div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Vault B · {vaultB.network}</p>
           </div>
           <h3 className="font-headline font-bold text-base text-on-surface leading-snug">{vaultB.name}</h3>
           <div className="flex flex-wrap gap-1">
@@ -575,47 +569,75 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
         />
       </div>
 
-      {/* Bottom: Annual gain callout */}
-      {annualGain != null && apyDiff != null && (
-        <div className="mx-6 mb-6 p-4 bg-primary-container rounded-xl flex items-start gap-3">
-          <span className="material-symbols-outlined text-on-tertiary-container text-[20px] mt-0.5 shrink-0">
-            trending_up
-          </span>
-          <div>
-            <p className="font-bold text-sm text-white leading-snug">
-              {betterVault} earns{' '}
-              <span className="text-tertiary-fixed font-black">
-                +${annualGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr more
-              </span>{' '}
-              on a $10,000 deposit
-            </p>
-            <p className="text-xs text-on-primary-container mt-0.5">
-              APY difference: {apyDiff}%
-            </p>
+      {/* ─── Combined Verdict + Deposit CTA ────────────────────────────────── */}
+      <div className="mx-6 mb-6 rounded-2xl overflow-hidden border border-surface-container">
+        {/* Top: verdict banner */}
+        <div className={`p-5 flex items-center justify-between gap-4 ${
+          isTie
+            ? 'bg-surface-container'
+            : winnerVault === vaultA
+            ? 'bg-primary-container'
+            : 'bg-on-tertiary-container/90'
+        }`}>
+          <div className="flex items-center gap-3">
+            <span className={`material-symbols-outlined text-2xl ${isTie ? 'text-on-surface-variant' : 'text-white'}`}>
+              {isTie ? 'balance' : 'emoji_events'}
+            </span>
+            <div>
+              <p className={`font-headline font-bold text-base leading-snug ${isTie ? 'text-on-surface' : 'text-white'}`}>
+                {isTie
+                  ? "It's a tie — both vaults are competitive"
+                  : `${winnerLabel} wins · ${Math.max(winsA, winsB)} of 4 metrics`}
+              </p>
+              {annualGain != null && apyDiff != null && !isTie && (
+                <p className={`text-xs mt-0.5 ${winnerVault === vaultA ? 'text-on-primary-container' : 'text-white/70'}`}>
+                  +${annualGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr more on $10,000 · APY gap: {apyDiff}%
+                </p>
+              )}
+            </div>
+          </div>
+          <div className={`shrink-0 px-3 py-1.5 rounded-full font-black text-xs border ${
+            isTie
+              ? 'border-surface-container-high text-on-surface-variant bg-surface-container-low'
+              : 'border-white/30 text-white bg-white/10'
+          }`}>
+            {isTie ? 'Tie' : winnerLabel}
           </div>
         </div>
-      )}
 
-      {/* Winner banner */}
-      <div className={`mx-6 mb-6 p-4 rounded-xl flex items-center justify-between ${winsA > winsB ? 'bg-on-tertiary-container/10 border border-on-tertiary-container/20' : winsB > winsA ? 'bg-secondary-container border border-secondary-container' : 'bg-surface-container'}`}>
-        <div className="flex items-center gap-3">
-          <span className="material-symbols-outlined text-on-tertiary-container text-[22px]">
-            {winsA === winsB ? 'balance' : 'emoji_events'}
-          </span>
-          <div>
-            <p className="font-headline font-bold text-sm text-on-surface">
-              {winsA === winsB
-                ? "It's a tie — both vaults are competitive"
-                : `${winsA > winsB ? 'Vault A' : 'Vault B'} wins overall with ${Math.max(winsA, winsB)} of 4 metrics`}
-            </p>
-            <p className="text-[10px] text-on-surface-variant">
-              Doctor's recommendation based on APY, TVL, and stability
-            </p>
+        {/* Bottom: deposit row */}
+        {!isTie && (
+          <div className="p-4 bg-surface-container-low flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
+                Doctor's Recommendation
+              </p>
+              <p className="text-sm font-bold text-on-surface mt-0.5">
+                Deposit into <span className="text-on-tertiary-container">{winnerVault.name}</span> on {winnerVault.network ?? `Chain ${winnerVault.chainId}`}
+              </p>
+              <p className="text-[10px] text-on-surface-variant mt-0.5">
+                {fmt(winnerLabel === 'Vault A' ? apyA : apyB)} APY · {winnerVault.protocol.name}
+              </p>
+            </div>
+            <button
+              onClick={() => handleDeposit(winnerVault, winnerLabel)}
+              disabled={depositing === winnerLabel}
+              className="shrink-0 px-6 py-3 bg-primary-container text-white rounded-xl font-black text-sm hover:opacity-90 transition-all disabled:opacity-50 flex items-center gap-2"
+            >
+              {depositing === winnerLabel ? (
+                <>
+                  <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                  Depositing...
+                </>
+              ) : (
+                <>
+                  <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                  Deposit into {winnerLabel}
+                </>
+              )}
+            </button>
           </div>
-        </div>
-        <div className={`px-3 py-1.5 rounded-full font-black text-xs ${winsA > winsB ? 'bg-on-tertiary-container text-white' : winsB > winsA ? 'bg-primary-container text-white' : 'bg-surface-container-high text-on-surface-variant'}`}>
-          {winsA === winsB ? 'Tie' : winsA > winsB ? 'A Wins' : 'B Wins'}
-        </div>
+        )}
       </div>
     </div>
   )
@@ -628,10 +650,8 @@ export default function ComparePage() {
   const [vaultB, setVaultB] = useState(null)
   const [showComparison, setShowComparison] = useState(false)
 
-  // Auto-trigger comparison when both are selected
   useEffect(() => {
     if (vaultA && vaultB) {
-      // Slight delay for polish
       const t = setTimeout(() => setShowComparison(true), 200)
       return () => clearTimeout(t)
     } else {
@@ -645,7 +665,6 @@ export default function ComparePage() {
     setShowComparison(false)
   }
 
-  // Progress indicator
   const progress = (vaultA ? 1 : 0) + (vaultB ? 1 : 0)
 
   return (
@@ -689,28 +708,15 @@ export default function ComparePage() {
         </div>
       </header>
 
-      {/* Comparison result (shown when both selected) */}
-      {showComparison && vaultA && vaultB && (
-        <div className="mb-8">
-          <ComparisonPanel
-            vaultA={vaultA}
-            vaultB={vaultB}
-            onClose={resetComparison}
-          />
-        </div>
-      )}
-
-      {/* Selectors — hide when showing comparison, show reset option instead */}
+      {/* Selectors — always show unless comparison is active */}
       {!showComparison ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Vault A */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           {!vaultA ? (
             <VaultSelector label="Vault A" address={address} onSelect={setVaultA} />
           ) : (
             <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => setVaultA(null)} />
           )}
 
-          {/* Vault B — only show after A is selected */}
           {!vaultA ? (
             <div className="bg-surface-container-lowest rounded-2xl border-2 border-dashed border-surface-container p-8 flex flex-col items-center justify-center text-center gap-3 opacity-40">
               <span className="material-symbols-outlined text-4xl text-on-surface-variant">looks_two</span>
@@ -724,38 +730,37 @@ export default function ComparePage() {
           )}
         </div>
       ) : (
-        /* After comparison, show mini chips + reset */
-        <div className="space-y-4">
+        /* When comparison is showing: chips on top */
+        <div className="space-y-4 mb-8">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => { setVaultA(null); setShowComparison(false) }} />
             <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => { setVaultB(null); setShowComparison(false) }} />
           </div>
-          <div className="flex justify-center">
-            <button
-              onClick={resetComparison}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-full border-2 border-surface-container-high text-sm font-bold text-on-surface-variant hover:border-primary-container hover:text-on-surface transition-all"
-            >
-              <span className="material-symbols-outlined text-[16px]">refresh</span>
-              Start New Comparison
-            </button>
-          </div>
         </div>
       )}
 
-      {/* Help text */}
-      {!vaultA && !showComparison && (
-        <div className="mt-8 p-6 bg-surface-container rounded-xl flex items-start gap-4">
-          <span className="material-symbols-outlined text-on-tertiary-container text-2xl shrink-0">
-            lightbulb
-          </span>
-          <div>
-            <p className="font-bold text-sm text-on-surface">How comparison works</p>
-            <p className="text-xs text-on-surface-variant mt-1 leading-relaxed">
-              Pick two vaults — from your active positions or any chain — and we'll instantly compare
-              them across APY, 30-day average, TVL depth, and our composite quality score. You'll
-              also see the projected annual gain difference on a $10,000 deposit.
-            </p>
-          </div>
+      {/* Comparison result */}
+      {showComparison && vaultA && vaultB && (
+        <div className="mb-6">
+          <ComparisonPanel
+            vaultA={vaultA}
+            vaultB={vaultB}
+            onClose={resetComparison}
+            userAddress={address}
+          />
+        </div>
+      )}
+
+      {/* Start New Comparison — always at the bottom when comparison is active */}
+      {showComparison && (
+        <div className="flex justify-center mt-2">
+          <button
+            onClick={resetComparison}
+            className="flex items-center gap-2 px-6 py-2.5 rounded-full border-2 border-surface-container-high text-sm font-bold text-on-surface-variant hover:border-primary-container hover:text-on-surface transition-all"
+          >
+            <span className="material-symbols-outlined text-[16px]">refresh</span>
+            Start New Comparison
+          </button>
         </div>
       )}
     </AppShell>

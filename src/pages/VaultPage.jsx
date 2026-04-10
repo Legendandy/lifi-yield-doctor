@@ -1,9 +1,10 @@
 // src/pages/VaultPage.jsx
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
+import DepositModal from '../components/DepositModal'
+import WithdrawModal from '../components/WithdrawModal'
 import { getVaultsForChain, getSupportedChains, computeVaultRankScore } from '../services/earnApi'
-import { executeDeposit } from '../services/executeDeposit'
 import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
 
 const PAGE_SIZE = 20
@@ -13,7 +14,6 @@ function getDoctorsChoice(vaults) {
   return vaults[0]
 }
 
-// Only show upgrade impact when doctor's pick genuinely beats the median
 function computeUpgradeImpact(doctorsChoiceVault, allVaults, assumedBalanceUsd = 10_000) {
   if (!allVaults.length || !doctorsChoiceVault?.analytics?.apy?.total) return null
 
@@ -27,11 +27,9 @@ function computeUpgradeImpact(doctorsChoiceVault, allVaults, assumedBalanceUsd =
   const medianApy = apys[Math.floor(apys.length / 2)]
   const bestApy = doctorsChoiceVault.analytics.apy.total
 
-  // Only show if doctor's pick is BETTER than median
   if (bestApy <= medianApy) return null
 
   const annualGain = (bestApy - medianApy) * assumedBalanceUsd
-  // Only show if the gain is meaningful (at least $1)
   if (annualGain < 1) return null
 
   return {
@@ -55,14 +53,16 @@ export default function VaultPage() {
 
   const [chains, setChains] = useState([])
   const [selectedChain, setSelectedChain] = useState(null)
-
   const [allVaults, setAllVaults] = useState([])
   const [pageIndex, setPageIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [chainsLoading, setChainsLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [depositing, setDepositing] = useState(null)
   const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
+
+  // Modal state
+  const [depositModal, setDepositModal] = useState(null) // vault object or null
+  const [withdrawModal, setWithdrawModal] = useState(null) // { vault, position } or null
 
   useEffect(() => {
     setChainsLoading(true)
@@ -72,7 +72,6 @@ export default function VaultPage() {
         if (data.length > 0) setSelectedChain(data[0])
       })
       .catch(err => {
-        console.error('Chains load error:', err)
         setError('Failed to load chains: ' + err.message)
       })
       .finally(() => setChainsLoading(false))
@@ -80,19 +79,16 @@ export default function VaultPage() {
 
   const loadVaultsForChain = useCallback(async (chain) => {
     if (!chain) return
-
     setLoading(true)
     setError(null)
     setAllVaults([])
     setPageIndex(0)
-
     try {
       const ranked = await getVaultsForChain({ chainId: chain.chainId })
       setAllVaults(ranked)
       const remaining = getCacheExpiresIn(CACHE_KEYS.chainVaults(chain.chainId))
       setCacheExpiresIn(remaining)
     } catch (err) {
-      console.error('Vault load error:', err)
       setError('Failed to load vaults: ' + err.message)
     } finally {
       setLoading(false)
@@ -103,7 +99,6 @@ export default function VaultPage() {
     loadVaultsForChain(selectedChain)
   }, [selectedChain, loadVaultsForChain])
 
-  // Update cache countdown
   useEffect(() => {
     if (!selectedChain) return
     const interval = setInterval(() => {
@@ -121,27 +116,6 @@ export default function VaultPage() {
   function handleChainSelect(chain) {
     if (chain.chainId === selectedChain?.chainId) return
     setSelectedChain(chain)
-  }
-
-  async function handleDeposit(vault) {
-    if (!vault.underlyingTokens?.length) {
-      alert('No underlying token info available for this vault.')
-      return
-    }
-    setDepositing(vault.address)
-    try {
-      await executeDeposit({
-        vault,
-        fromToken: vault.underlyingTokens[0],
-        fromAmount: '1000000',
-        userAddress: address,
-      })
-      alert('Deposit transaction sent!')
-    } catch (err) {
-      alert(`Deposit failed: ${err.message}`)
-    } finally {
-      setDepositing(null)
-    }
   }
 
   return (
@@ -189,10 +163,7 @@ export default function VaultPage() {
       {error && (
         <div className="mb-6 p-4 bg-error-container/30 border border-error-container rounded-xl text-on-error-container text-sm font-medium">
           <strong>Error:</strong> {error}
-          <button
-            onClick={() => loadVaultsForChain(selectedChain)}
-            className="ml-4 underline hover:no-underline"
-          >
+          <button onClick={() => loadVaultsForChain(selectedChain)} className="ml-4 underline hover:no-underline">
             Retry
           </button>
         </div>
@@ -220,8 +191,7 @@ export default function VaultPage() {
             <DoctorsChoiceCard
               vault={doctorsChoice}
               impact={upgradeImpact}
-              onDeposit={() => handleDeposit(doctorsChoice)}
-              isDepositing={depositing === doctorsChoice.address}
+              onDeposit={() => setDepositModal(doctorsChoice)}
               chainName={selectedChain?.name}
             />
           )}
@@ -230,8 +200,8 @@ export default function VaultPage() {
             vaults={pagedVaults}
             allVaults={allVaults}
             doctorsChoiceAddress={doctorsChoice?.address}
-            onDeposit={handleDeposit}
-            depositing={depositing}
+            onDeposit={(vault) => setDepositModal(vault)}
+            onWithdraw={(vault) => setWithdrawModal({ vault, position: null })}
             pageIndex={pageIndex}
             totalPages={totalPages}
             totalVaults={allVaults.length}
@@ -239,11 +209,34 @@ export default function VaultPage() {
           />
         </div>
       )}
+
+      {/* Deposit Modal */}
+      {depositModal && (
+        <DepositModal
+          vault={depositModal}
+          onClose={() => setDepositModal(null)}
+          onSuccess={() => {
+            setDepositModal(null)
+          }}
+        />
+      )}
+
+      {/* Withdraw Modal */}
+      {withdrawModal && (
+        <WithdrawModal
+          vault={withdrawModal.vault}
+          position={withdrawModal.position}
+          onClose={() => setWithdrawModal(null)}
+          onSuccess={() => {
+            setWithdrawModal(null)
+          }}
+        />
+      )}
     </AppShell>
   )
 }
 
-function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing, chainName }) {
+function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
   const apy = vault.analytics.apy.total != null
     ? (vault.analytics.apy.total * 100).toFixed(2)
     : 'N/A'
@@ -259,7 +252,6 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing, chainName }
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow overflow-hidden border border-surface-container">
       <div className="grid grid-cols-12 gap-0">
-        {/* Left: vault info */}
         <div className={`${impact ? 'col-span-12 lg:col-span-8' : 'col-span-12'} p-8 space-y-6`}>
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-on-tertiary-container text-lg">verified</span>
@@ -312,19 +304,19 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing, chainName }
             </div>
           </div>
 
-          {/* If no upgrade impact (doctor's pick IS the median or below), show a simple CTA */}
           {!impact && (
-            <button
-              onClick={onDeposit}
-              disabled={isDepositing}
-              className="px-6 py-3 bg-primary-container text-white rounded-xl font-black text-sm hover:opacity-90 transition-colors disabled:opacity-50"
-            >
-              {isDepositing ? 'Depositing...' : 'Deposit Now'}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={onDeposit}
+                className="px-6 py-3 bg-primary-container text-white rounded-xl font-black text-sm hover:opacity-90 transition-colors flex items-center gap-2"
+              >
+                <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                Deposit
+              </button>
+            </div>
           )}
         </div>
 
-        {/* Right: Upgrade Impact — only shown when doctor's pick beats the median */}
         {impact && (
           <div className="col-span-12 lg:col-span-4 bg-primary-container p-8 flex flex-col justify-between">
             <div className="space-y-4">
@@ -353,10 +345,10 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing, chainName }
             </div>
             <button
               onClick={onDeposit}
-              disabled={isDepositing}
-              className="w-full mt-6 py-4 bg-white text-primary-container rounded-xl font-black text-sm hover:bg-slate-100 transition-colors disabled:opacity-50"
+              className="w-full mt-6 py-4 bg-white text-primary-container rounded-xl font-black text-sm hover:bg-slate-100 transition-colors flex items-center justify-center gap-2"
             >
-              {isDepositing ? 'Depositing...' : 'Execute Upgrade'}
+              <span className="material-symbols-outlined text-[16px]">add_circle</span>
+              Execute Upgrade
             </button>
           </div>
         )}
@@ -367,7 +359,7 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing, chainName }
 
 function VaultTable({
   vaults, allVaults, doctorsChoiceAddress,
-  onDeposit, depositing,
+  onDeposit, onWithdraw,
   pageIndex, totalPages, totalVaults, onPageChange
 }) {
   const medianApy = (() => {
@@ -394,13 +386,14 @@ function VaultTable({
         </div>
       </div>
 
+      {/* Column headers */}
       <div className="px-6 py-3 grid grid-cols-12 gap-4 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant border-b border-surface-container bg-surface-container-low">
         <div className="col-span-1 text-center">#</div>
         <div className="col-span-4">Protocol / Chain</div>
         <div className="col-span-2 text-right">Current APY</div>
         <div className="col-span-1 text-right">30d Avg</div>
         <div className="col-span-2 text-right">TVL</div>
-        <div className="col-span-2 text-right">Action</div>
+        <div className="col-span-2 text-right">Actions</div>
       </div>
 
       <div className="divide-y divide-surface-container">
@@ -490,18 +483,26 @@ function VaultTable({
                 </p>
               </div>
 
-              <div className="col-span-2 flex justify-end">
+              {/* Actions: Deposit + Withdraw */}
+              <div className="col-span-2 flex justify-end gap-1.5">
                 <button
                   onClick={() => onDeposit(vault)}
-                  disabled={depositing === vault.address}
-                  className={`px-4 py-2 rounded-full text-xs font-bold transition-all disabled:opacity-50
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1
                     ${isBestMatch
                       ? 'bg-primary-container text-white hover:opacity-90'
                       : 'border-2 border-primary-container text-primary-container hover:bg-primary-container hover:text-white'
                     }
                   `}
                 >
-                  {depositing === vault.address ? '...' : 'Deposit'}
+                  <span className="material-symbols-outlined text-[12px]">add</span>
+                  Deposit
+                </button>
+                <button
+                  onClick={() => onWithdraw(vault)}
+                  className="px-3 py-1.5 rounded-full text-xs font-bold transition-all border-2 border-surface-container-high text-on-surface-variant hover:border-error hover:text-error flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[12px]">remove</span>
+                  Withdraw
                 </button>
               </div>
             </div>

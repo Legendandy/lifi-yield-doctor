@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RainbowKitProvider, getDefaultConfig } from '@rainbow-me/rainbowkit'
 import { base, arbitrum, mainnet } from 'wagmi/chains'
 import { BrowserRouter } from 'react-router-dom'
+import { ToastProvider } from './components/ToastNotifications'
 import '@rainbow-me/rainbowkit/styles.css'
 import './index.css'
 
@@ -24,7 +25,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
           <BrowserRouter>
-            <App />
+            <ToastProvider>
+              <App />
+            </ToastProvider>
           </BrowserRouter>
         </RainbowKitProvider>
       </QueryClientProvider>

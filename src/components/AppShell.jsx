@@ -74,16 +74,6 @@ export default function AppShell({ children }) {
             )
           })}
         </nav>
-
-        <div className="mt-auto space-y-1">
-          <button
-            onClick={() => navigate('/vaults')}
-            className="w-full mb-4 py-3 px-4 bg-primary-container text-white rounded-full font-bold text-sm shadow-md flex items-center justify-center gap-2"
-          >
-            <span className="material-symbols-outlined text-[18px]">add_circle</span>
-            Run New Diagnosis
-          </button>
-        </div>
       </aside>
 
       {/* MAIN CONTENT */}
