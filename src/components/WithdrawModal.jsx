@@ -1,4 +1,6 @@
 // src/components/WithdrawModal.jsx
+// Fixed: no chain warning banner, auto network switch, zero balance guard
+
 import { useState, useEffect, useRef } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
 import { useToast } from './ToastNotifications'
@@ -40,7 +42,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const tokenSymbol = getTokenSymbol(vault)
   const needsChainSwitch = walletChainId !== vaultChainId
 
-  // The available balance is from the position (the user's deposited amount)
   const positionBalanceUsd = position?.balanceUsd ?? vault?._positionBalanceUsd ?? 0
   const positionBalance = position?.balance ?? vault?._positionBalance ?? null
   const positionBalanceFormatted = positionBalance
@@ -49,9 +50,12 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     ? `~$${Number(positionBalanceUsd).toLocaleString()}`
     : '0'
 
+  const maxBalance = positionBalance ? parseFloat(positionBalance) : 0
+  const hasZeroBalance = maxBalance === 0 && (!positionBalanceUsd || positionBalanceUsd <= 0)
+
   const [amount, setAmount] = useState('')
-  const [withdrawType, setWithdrawType] = useState('partial') // partial | full
-  const [step, setStep] = useState('input') // input | switching | withdrawing | done
+  const [withdrawType, setWithdrawType] = useState('partial')
+  const [step, setStep] = useState('input')
   const [error, setError] = useState(null)
   const inputRef = useRef(null)
 
@@ -60,20 +64,25 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   }, [])
 
   const amountNum = parseFloat(amount) || 0
-  const maxBalance = positionBalance ? parseFloat(positionBalance) : null
-  const hasInsufficientBalance = maxBalance !== null && amountNum > 0 && amountNum > maxBalance
-  const isValid = withdrawType === 'full' || (amountNum > 0 && !hasInsufficientBalance)
-  const isBusy = step === 'switching' || step === 'withdrawing'
+  const hasInsufficientBalance = maxBalance > 0 && amountNum > 0 && amountNum > maxBalance
+  const hasEnteredZero = amountNum <= 0 && amount.trim() !== ''
 
+  // Validation: partial requires positive amount within balance
+  // full requires non-zero balance
+  const isValidPartial = withdrawType === 'partial' && amountNum > 0 && !hasInsufficientBalance && amount.trim() !== '' && maxBalance > 0
+  const isValidFull = withdrawType === 'full' && !hasZeroBalance
+  const isValid = isValidPartial || isValidFull
+
+  const isBusy = step === 'switching' || step === 'withdrawing'
   const apy = vault?.analytics?.apy?.total
   const apyDisplay = apy != null ? `${(apy * 100).toFixed(2)}%` : 'N/A'
 
   function setMax() {
-    if (maxBalance != null) setAmount(maxBalance.toFixed(6))
+    if (maxBalance > 0) setAmount(maxBalance.toFixed(6))
   }
 
   function setHalf() {
-    if (maxBalance != null) setAmount((maxBalance / 2).toFixed(6))
+    if (maxBalance > 0) setAmount((maxBalance / 2).toFixed(6))
   }
 
   function toRawAmount(humanAmount, decimals) {
@@ -88,29 +97,19 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     setError(null)
 
     try {
-      // Step 1: Switch chain if needed
+      // Step 1: Auto-switch chain if needed (silent, no warning banner)
       if (needsChainSwitch) {
         setStep('switching')
-        const switchId = toast.loading('Switching Network', `Switching to ${getChainName(vaultChainId)}...`)
         try {
           await switchChainAsync({ chainId: vaultChainId })
-          toast.update(switchId, {
-            type: 'success',
-            title: 'Network Switched',
-            message: `Now on ${getChainName(vaultChainId)}`,
-            duration: 3000,
-          })
         } catch (switchErr) {
-          toast.update(switchId, {
-            type: 'error',
-            title: 'Switch Failed',
-            message: switchErr?.message?.includes('User rejected')
-              ? 'You rejected the network switch.'
-              : `Failed to switch to ${getChainName(vaultChainId)}.`,
-            duration: 5000,
-          })
           setStep('input')
-          setError('Please switch to ' + getChainName(vaultChainId) + ' in your wallet.')
+          const rejected = switchErr?.message?.toLowerCase().includes('user rejected')
+          setError(rejected
+            ? 'Please approve the network switch in your wallet.'
+            : `Could not switch to ${getChainName(vaultChainId)}.`)
+          toast.error('Network Switch Failed',
+            rejected ? 'You rejected the network switch.' : `Failed to switch to ${getChainName(vaultChainId)}.`)
           return
         }
       }
@@ -142,7 +141,9 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
       } catch (withdrawErr) {
         toast.dismiss(withdrawId)
         const msg = withdrawErr?.message ?? ''
-        const isRejected = msg.toLowerCase().includes('user rejected') || msg.toLowerCase().includes('user denied') || msg.toLowerCase().includes('rejected')
+        const isRejected = msg.toLowerCase().includes('user rejected') ||
+          msg.toLowerCase().includes('user denied') ||
+          msg.toLowerCase().includes('rejected')
         if (isRejected) {
           toast.error('Transaction Rejected', 'You cancelled the withdrawal.')
         } else {
@@ -162,7 +163,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
         { duration: 8000 }
       )
       onSuccess?.({ vault, amount, txHash: result?.txHash })
-
     } catch (err) {
       setStep('input')
       setError(err?.message ?? 'Unknown error')
@@ -172,14 +172,12 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
-      {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={!isBusy ? onClose : undefined}
       />
 
-      {/* Modal */}
-      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden animate-in">
+      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-surface-container">
           <div className="flex items-center justify-between">
@@ -216,21 +214,21 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Chain switch warning */}
-          {needsChainSwitch && step !== 'done' && (
+          {/* Zero balance warning */}
+          {hasZeroBalance && step !== 'done' && (
             <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-              <span className="material-symbols-outlined text-amber-500 text-[18px] shrink-0 mt-0.5">swap_horiz</span>
+              <span className="material-symbols-outlined text-amber-500 text-[18px] shrink-0 mt-0.5">info</span>
               <div>
-                <p className="font-bold text-sm text-amber-800">Network Switch Required</p>
+                <p className="font-bold text-sm text-amber-800">No Balance to Withdraw</p>
                 <p className="text-xs text-amber-700 mt-0.5">
-                  You're on {getChainName(walletChainId)}. Withdrawing will auto-switch to {getChainName(vaultChainId)}.
+                  You don't have any funds in this vault position.
                 </p>
               </div>
             </div>
           )}
 
           {/* Withdraw type selector */}
-          {step !== 'done' && (
+          {step !== 'done' && !hasZeroBalance && (
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setWithdrawType('partial')}
@@ -255,15 +253,15 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
             </div>
           )}
 
-          {/* Amount input — only for partial */}
-          {step !== 'done' && withdrawType === 'partial' && (
+          {/* Partial amount input */}
+          {step !== 'done' && withdrawType === 'partial' && !hasZeroBalance && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
                   Amount ({tokenSymbol})
                 </label>
                 <span className="text-xs text-on-surface-variant font-medium">
-                  Available: {positionBalanceFormatted} {maxBalance ? tokenSymbol : ''}
+                  Available: {positionBalanceFormatted} {maxBalance > 0 ? tokenSymbol : ''}
                 </span>
               </div>
 
@@ -282,15 +280,15 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                   value={amount}
                   onChange={e => { setError(null); setAmount(e.target.value) }}
                   placeholder="0.00"
-                  disabled={isBusy}
+                  disabled={isBusy || maxBalance === 0}
                   className="flex-1 px-4 py-3.5 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50"
                 />
                 <div className="flex items-center gap-1 pr-3">
-                  <button onClick={setHalf} disabled={isBusy || !maxBalance}
+                  <button onClick={setHalf} disabled={isBusy || maxBalance === 0}
                     className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-on-surface-variant bg-surface-container rounded-lg hover:bg-surface-container-high transition-colors disabled:opacity-40">
                     50%
                   </button>
-                  <button onClick={setMax} disabled={isBusy || !maxBalance}
+                  <button onClick={setMax} disabled={isBusy || maxBalance === 0}
                     className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-error bg-error/10 rounded-lg hover:bg-error/20 transition-colors disabled:opacity-40">
                     MAX
                   </button>
@@ -301,7 +299,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                 <div className="flex items-center gap-2 text-red-600">
                   <span className="material-symbols-outlined text-[14px]">error</span>
                   <p className="text-xs font-bold">
-                    Exceeds deposited balance of {maxBalance?.toFixed(4)} {tokenSymbol}.
+                    Exceeds deposited balance of {maxBalance.toFixed(4)} {tokenSymbol}.
                   </p>
                 </div>
               )}
@@ -309,7 +307,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
           )}
 
           {/* Full withdraw summary */}
-          {step !== 'done' && withdrawType === 'full' && (
+          {step !== 'done' && withdrawType === 'full' && !hasZeroBalance && (
             <div className="p-4 bg-error/5 border border-error/20 rounded-xl space-y-2">
               <p className="font-bold text-sm text-on-surface">Withdraw everything</p>
               <p className="text-xs text-on-surface-variant">
@@ -333,7 +331,9 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
           {/* Busy status */}
           {isBusy && (
             <div className="space-y-2">
-              <StepIndicator label="Switch Network" status={step === 'switching' ? 'active' : 'done'} skip={!needsChainSwitch} />
+              {needsChainSwitch && (
+                <StepIndicator label="Switch Network" status={step === 'switching' ? 'active' : 'done'} />
+              )}
               <StepIndicator label="Submit Withdrawal" status={step === 'withdrawing' ? 'active' : 'pending'} />
             </div>
           )}
@@ -345,9 +345,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                 <span className="material-symbols-outlined text-on-tertiary-container text-3xl">check_circle</span>
               </div>
               <h3 className="font-headline font-extrabold text-xl text-on-surface">Withdrawal Complete!</h3>
-              <p className="text-sm text-on-surface-variant">
-                Your funds have been returned to your wallet.
-              </p>
+              <p className="text-sm text-on-surface-variant">Your funds have been returned to your wallet.</p>
             </div>
           )}
 
@@ -371,7 +369,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                   {step === 'switching' && 'Switching Network...'}
                   {step === 'withdrawing' && 'Withdrawing...'}
                 </>
-              ) : needsChainSwitch ? (
+              ) : needsChainSwitch && isValid ? (
                 <>
                   <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
                   Switch & Withdraw

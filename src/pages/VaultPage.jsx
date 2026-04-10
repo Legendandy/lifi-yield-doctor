@@ -1,9 +1,8 @@
 // src/pages/VaultPage.jsx
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
 import DepositModal from '../components/DepositModal'
-import WithdrawModal from '../components/WithdrawModal'
 import { getVaultsForChain, getSupportedChains, computeVaultRankScore } from '../services/earnApi'
 import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
 
@@ -60,9 +59,8 @@ export default function VaultPage() {
   const [error, setError] = useState(null)
   const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
 
-  // Modal state
+  // Modal state — replaces the old inline handleDeposit + alert flow
   const [depositModal, setDepositModal] = useState(null) // vault object or null
-  const [withdrawModal, setWithdrawModal] = useState(null) // { vault, position } or null
 
   useEffect(() => {
     setChainsLoading(true)
@@ -72,6 +70,7 @@ export default function VaultPage() {
         if (data.length > 0) setSelectedChain(data[0])
       })
       .catch(err => {
+        console.error('Chains load error:', err)
         setError('Failed to load chains: ' + err.message)
       })
       .finally(() => setChainsLoading(false))
@@ -89,6 +88,7 @@ export default function VaultPage() {
       const remaining = getCacheExpiresIn(CACHE_KEYS.chainVaults(chain.chainId))
       setCacheExpiresIn(remaining)
     } catch (err) {
+      console.error('Vault load error:', err)
       setError('Failed to load vaults: ' + err.message)
     } finally {
       setLoading(false)
@@ -99,6 +99,7 @@ export default function VaultPage() {
     loadVaultsForChain(selectedChain)
   }, [selectedChain, loadVaultsForChain])
 
+  // Update cache countdown
   useEffect(() => {
     if (!selectedChain) return
     const interval = setInterval(() => {
@@ -163,7 +164,10 @@ export default function VaultPage() {
       {error && (
         <div className="mb-6 p-4 bg-error-container/30 border border-error-container rounded-xl text-on-error-container text-sm font-medium">
           <strong>Error:</strong> {error}
-          <button onClick={() => loadVaultsForChain(selectedChain)} className="ml-4 underline hover:no-underline">
+          <button
+            onClick={() => loadVaultsForChain(selectedChain)}
+            className="ml-4 underline hover:no-underline"
+          >
             Retry
           </button>
         </div>
@@ -201,7 +205,6 @@ export default function VaultPage() {
             allVaults={allVaults}
             doctorsChoiceAddress={doctorsChoice?.address}
             onDeposit={(vault) => setDepositModal(vault)}
-            onWithdraw={(vault) => setWithdrawModal({ vault, position: null })}
             pageIndex={pageIndex}
             totalPages={totalPages}
             totalVaults={allVaults.length}
@@ -210,26 +213,12 @@ export default function VaultPage() {
         </div>
       )}
 
-      {/* Deposit Modal */}
+      {/* Deposit Modal — full Composer integration */}
       {depositModal && (
         <DepositModal
           vault={depositModal}
           onClose={() => setDepositModal(null)}
-          onSuccess={() => {
-            setDepositModal(null)
-          }}
-        />
-      )}
-
-      {/* Withdraw Modal */}
-      {withdrawModal && (
-        <WithdrawModal
-          vault={withdrawModal.vault}
-          position={withdrawModal.position}
-          onClose={() => setWithdrawModal(null)}
-          onSuccess={() => {
-            setWithdrawModal(null)
-          }}
+          onSuccess={() => setDepositModal(null)}
         />
       )}
     </AppShell>
@@ -252,6 +241,7 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow overflow-hidden border border-surface-container">
       <div className="grid grid-cols-12 gap-0">
+        {/* Left: vault info */}
         <div className={`${impact ? 'col-span-12 lg:col-span-8' : 'col-span-12'} p-8 space-y-6`}>
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-on-tertiary-container text-lg">verified</span>
@@ -305,18 +295,16 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
           </div>
 
           {!impact && (
-            <div className="flex gap-3">
-              <button
-                onClick={onDeposit}
-                className="px-6 py-3 bg-primary-container text-white rounded-xl font-black text-sm hover:opacity-90 transition-colors flex items-center gap-2"
-              >
-                <span className="material-symbols-outlined text-[16px]">add_circle</span>
-                Deposit
-              </button>
-            </div>
+            <button
+              onClick={onDeposit}
+              className="px-6 py-3 bg-primary-container text-white rounded-xl font-black text-sm hover:opacity-90 transition-colors"
+            >
+              Deposit Now
+            </button>
           )}
         </div>
 
+        {/* Right: Upgrade Impact — only shown when doctor's pick beats the median */}
         {impact && (
           <div className="col-span-12 lg:col-span-4 bg-primary-container p-8 flex flex-col justify-between">
             <div className="space-y-4">
@@ -345,9 +333,8 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
             </div>
             <button
               onClick={onDeposit}
-              className="w-full mt-6 py-4 bg-white text-primary-container rounded-xl font-black text-sm hover:bg-slate-100 transition-colors flex items-center justify-center gap-2"
+              className="w-full mt-6 py-4 bg-white text-primary-container rounded-xl font-black text-sm hover:bg-slate-100 transition-colors"
             >
-              <span className="material-symbols-outlined text-[16px]">add_circle</span>
               Execute Upgrade
             </button>
           </div>
@@ -359,7 +346,7 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
 
 function VaultTable({
   vaults, allVaults, doctorsChoiceAddress,
-  onDeposit, onWithdraw,
+  onDeposit,
   pageIndex, totalPages, totalVaults, onPageChange
 }) {
   const medianApy = (() => {
@@ -393,7 +380,7 @@ function VaultTable({
         <div className="col-span-2 text-right">Current APY</div>
         <div className="col-span-1 text-right">30d Avg</div>
         <div className="col-span-2 text-right">TVL</div>
-        <div className="col-span-2 text-right">Actions</div>
+        <div className="col-span-2 text-right">Action</div>
       </div>
 
       <div className="divide-y divide-surface-container">
@@ -483,26 +470,18 @@ function VaultTable({
                 </p>
               </div>
 
-              {/* Actions: Deposit + Withdraw */}
-              <div className="col-span-2 flex justify-end gap-1.5">
+              {/* Deposit only — no Withdraw */}
+              <div className="col-span-2 flex justify-end">
                 <button
                   onClick={() => onDeposit(vault)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1
+                  className={`px-4 py-2 rounded-full text-xs font-bold transition-all
                     ${isBestMatch
                       ? 'bg-primary-container text-white hover:opacity-90'
                       : 'border-2 border-primary-container text-primary-container hover:bg-primary-container hover:text-white'
                     }
                   `}
                 >
-                  <span className="material-symbols-outlined text-[12px]">add</span>
                   Deposit
-                </button>
-                <button
-                  onClick={() => onWithdraw(vault)}
-                  className="px-3 py-1.5 rounded-full text-xs font-bold transition-all border-2 border-surface-container-high text-on-surface-variant hover:border-error hover:text-error flex items-center gap-1"
-                >
-                  <span className="material-symbols-outlined text-[12px]">remove</span>
-                  Withdraw
                 </button>
               </div>
             </div>
