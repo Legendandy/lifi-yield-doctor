@@ -6,7 +6,7 @@ import AppShell from '../components/AppShell'
 import { getPortfolioPositions, getVaults } from '../services/earnApi'
 import { getDiagnosis } from '../services/aiDiagnosis'
 
-// Simple health label based on APY competitiveness vs top vault
+// Health label based on APY competitiveness vs top vault
 function getHealthTag(currentApy, bestAvailableApy) {
   if (currentApy == null || bestAvailableApy == null) return { label: 'Unknown', color: '#76777d' }
   const isUnderperforming = bestAvailableApy > currentApy * 1.2
@@ -33,14 +33,12 @@ export default function DashboardPage() {
     setLoading(true)
     setError(null)
     try {
-      // Fetch real positions from LI.FI Earn API
       const userPositions = await getPortfolioPositions(address)
       const hasAny = userPositions && userPositions.length > 0
       setHasPositions(hasAny)
       setPositions(userPositions || [])
 
-      // Fetch top SANE vaults (APY < 200%, TVL > $500k, consistent rolling data)
-      // Using minTvlUsd=500000 to ensure real liquidity and sortBy=apy for best opportunities
+      // Fetch safe, high-quality vaults — sanity filter handles bad data
       const topVaults = await getVaults({
         sortBy: 'apy',
         minTvlUsd: 500_000,
@@ -48,7 +46,6 @@ export default function DashboardPage() {
       })
       setVaults(topVaults)
 
-      // AI diagnosis using ONLY real sanitised data
       const aiText = await getDiagnosis({
         positions: userPositions || [],
         availableVaults: topVaults,
@@ -85,12 +82,7 @@ export default function DashboardPage() {
       {error && (
         <div className="mb-6 p-4 bg-error-container/30 border border-error-container rounded-xl text-on-error-container text-sm font-medium">
           <strong>Error loading data:</strong> {error}
-          <button
-            onClick={loadData}
-            className="ml-4 underline hover:no-underline"
-          >
-            Retry
-          </button>
+          <button onClick={loadData} className="ml-4 underline hover:no-underline">Retry</button>
         </div>
       )}
 
@@ -122,8 +114,6 @@ export default function DashboardPage() {
   )
 }
 
-// ─── Sub-components ─────────────────────────────────────────────────────────
-
 function LoadingSkeleton() {
   return (
     <div className="grid grid-cols-12 gap-8 animate-pulse">
@@ -144,16 +134,11 @@ function NoPositionsState({ onGoToVaults }) {
   return (
     <div className="bg-surface-container-lowest p-8 rounded-xl clinical-shadow text-center space-y-4">
       <div className="w-16 h-16 bg-surface-container rounded-full flex items-center justify-center mx-auto">
-        <span className="material-symbols-outlined text-3xl text-on-surface-variant">
-          account_balance
-        </span>
+        <span className="material-symbols-outlined text-3xl text-on-surface-variant">account_balance</span>
       </div>
-      <h3 className="font-headline font-bold text-xl text-on-surface">
-        No Active Vaults
-      </h3>
+      <h3 className="font-headline font-bold text-xl text-on-surface">No Active Vaults</h3>
       <p className="text-on-surface-variant text-sm">
-        You don't have any positions yet. See the Doctor's vault recommendations
-        to get started.
+        You don't have any positions yet. See the Doctor's vault recommendations to get started.
       </p>
       <button
         onClick={onGoToVaults}
@@ -166,7 +151,6 @@ function NoPositionsState({ onGoToVaults }) {
 }
 
 function PositionCard({ position, allVaults }) {
-  // Try to find a matching vault from our sane vault list for APY display
   const matchingVault = allVaults.find((v) =>
     v.underlyingTokens?.some((t) => t.symbol === position.asset?.symbol)
   )
@@ -183,9 +167,7 @@ function PositionCard({ position, allVaults }) {
       <div className="flex justify-between items-start mb-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-surface-container flex items-center justify-center">
-            <span className="material-symbols-outlined text-on-surface-variant">
-              toll
-            </span>
+            <span className="material-symbols-outlined text-on-surface-variant">toll</span>
           </div>
           <div>
             <h3 className="font-headline font-bold text-lg text-on-surface">
@@ -197,31 +179,21 @@ function PositionCard({ position, allVaults }) {
           </div>
         </div>
         <div className="text-right">
-          <span className="block text-2xl font-headline font-black text-on-surface">
-            {apyDisplay}
-          </span>
-          <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">
-            Current APY
-          </span>
+          <span className="block text-2xl font-headline font-black text-on-surface">{apyDisplay}</span>
+          <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">Current APY</span>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-6">
         <div>
-          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">
-            Balance
-          </span>
+          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Balance</span>
           <span className="text-lg font-bold text-on-surface">
             ${Number(position.balanceUsd || 0).toLocaleString()}
           </span>
         </div>
         <div>
-          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">
-            Health
-          </span>
-          <span className="text-sm font-bold" style={{ color: tag.color }}>
-            {tag.label}
-          </span>
+          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Health</span>
+          <span className="text-sm font-bold" style={{ color: tag.color }}>{tag.label}</span>
         </div>
       </div>
     </div>
@@ -233,17 +205,11 @@ function DiagnosisSummary({ diagnosis, loading }) {
     <div className="bg-primary-container p-6 rounded-xl space-y-4">
       <div className="flex items-center gap-3">
         <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
-          <span className="material-symbols-outlined text-tertiary-fixed text-[18px]">
-            psychology
-          </span>
+          <span className="material-symbols-outlined text-tertiary-fixed text-[18px]">psychology</span>
         </div>
         <div>
-          <h3 className="font-headline font-bold text-white">
-            Diagnosis Summary
-          </h3>
-          <p className="text-[10px] uppercase tracking-widest text-on-primary-container">
-            AI Health Report
-          </p>
+          <h3 className="font-headline font-bold text-white">Diagnosis Summary</h3>
+          <p className="text-[10px] uppercase tracking-widest text-on-primary-container">AI Health Report</p>
         </div>
       </div>
       <div className="text-sm text-slate-300 leading-relaxed">
@@ -265,31 +231,20 @@ function AlternativesTable({ vaults }) {
   return (
     <div className="bg-surface-container-lowest rounded-xl clinical-shadow">
       <div className="p-4 border-b border-surface-container">
-        <h3 className="font-headline font-bold text-on-surface">
-          Recommended Vaults
-        </h3>
-        <p className="text-xs text-on-surface-variant">
-          Highest verified APY · TVL &gt; $500k
-        </p>
+        <h3 className="font-headline font-bold text-on-surface">Recommended Vaults</h3>
+        <p className="text-xs text-on-surface-variant">Highest verified APY · TVL &gt; $500k</p>
       </div>
       <div className="divide-y divide-surface-container">
         {vaults.slice(0, 5).map((vault, i) => {
-          const apy =
-            vault.analytics.apy.total != null
-              ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
-              : 'N/A'
+          const apy = vault.analytics.apy.total != null
+            ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
+            : 'N/A'
           return (
-            <div
-              key={i}
-              className="p-4 flex justify-between items-center hover:bg-surface-container-low transition-colors"
-            >
+            <div key={i} className="p-4 flex justify-between items-center hover:bg-surface-container-low transition-colors">
               <div>
-                <p className="font-bold text-sm text-on-surface">
-                  {vault.name}
-                </p>
+                <p className="font-bold text-sm text-on-surface">{vault.name}</p>
                 <p className="text-xs text-on-surface-variant">
-                  {vault.protocol.name} · TVL $
-                  {(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M
+                  {vault.protocol.name} · TVL ${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M
                 </p>
               </div>
               <span className="font-bold text-on-tertiary-container">{apy}</span>

@@ -2,15 +2,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
-import { getVaultsPaged } from '../services/earnApi'
+import { getVaultsPaged, getSupportedChains } from '../services/earnApi'
 import { executeDeposit } from '../services/executeDeposit'
 
 // ─── Doctor's Choice logic ────────────────────────────────────────────────────
 // Best vault = highest APY among sane vaults with TVL > $1M
-// We weight high TVL (real liquidity) and a top APY together.
 function getDoctorsChoice(vaults) {
   if (!vaults.length) return null
-  // Among all sane vaults, pick the one with the highest APY that also has TVL > $1M
   const highLiquidity = vaults.filter(
     (v) => Number(v.analytics?.tvl?.usd ?? 0) >= 1_000_000
   )
@@ -42,24 +40,34 @@ function computeUpgradeImpact(doctorsChoiceVault, allVaults, assumedBalanceUsd =
 export default function VaultPage() {
   const { address } = useAccount()
   const [vaults, setVaults] = useState([])
+  const [chains, setChains] = useState([])
+  const [selectedChainId, setSelectedChainId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState(null)
   const [depositing, setDepositing] = useState(null)
   const [nextCursor, setNextCursor] = useState(null)
 
-  const PAGE_SIZE = 10
+  const PAGE_SIZE = 20
 
-  const loadVaults = useCallback(async (cursor = null, append = false) => {
+  // Load chain list once on mount
+  useEffect(() => {
+    getSupportedChains()
+      .then(setChains)
+      .catch(() => {}) // non-fatal
+  }, [])
+
+  const loadVaults = useCallback(async (cursor = null, append = false, chainId = selectedChainId) => {
     if (!cursor) setLoading(true)
     else setLoadingMore(true)
     setError(null)
     try {
       const { data, nextCursor: nc } = await getVaultsPaged({
         sortBy: 'apy',
-        minTvlUsd: 500_000,
+        minTvlUsd: 100_000,
         pageSize: PAGE_SIZE,
         cursor: cursor ?? undefined,
+        chainId: chainId ?? undefined,
       })
       setVaults((prev) => (append ? [...prev, ...data] : data))
       setNextCursor(nc)
@@ -70,11 +78,18 @@ export default function VaultPage() {
       setLoading(false)
       setLoadingMore(false)
     }
-  }, [])
+  }, [selectedChainId])
 
   useEffect(() => {
     loadVaults()
   }, [loadVaults])
+
+  // When chain filter changes, reset and reload
+  function handleChainChange(chainId) {
+    setSelectedChainId(chainId)
+    setVaults([])
+    setNextCursor(null)
+  }
 
   const doctorsChoice = getDoctorsChoice(vaults)
   const upgradeImpact = doctorsChoice ? computeUpgradeImpact(doctorsChoice, vaults) : null
@@ -111,7 +126,7 @@ export default function VaultPage() {
   return (
     <AppShell>
       {/* ── Header ── */}
-      <header className="mb-8 flex justify-between items-end">
+      <header className="mb-6 flex justify-between items-end">
         <div>
           <h1 className="text-3xl font-headline font-extrabold tracking-tight text-on-surface">
             Ranked Alternatives: Upgrade Your Yield
@@ -133,6 +148,35 @@ export default function VaultPage() {
         )}
       </header>
 
+      {/* ── Chain Filter ── */}
+      {chains.length > 0 && (
+        <div className="mb-6 flex gap-2 flex-wrap">
+          <button
+            onClick={() => handleChainChange(null)}
+            className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all border ${
+              selectedChainId === null
+                ? 'bg-primary-container text-white border-primary-container'
+                : 'border-surface-container-high text-on-surface-variant hover:border-primary-container hover:text-on-surface'
+            }`}
+          >
+            All Chains
+          </button>
+          {chains.map((chain) => (
+            <button
+              key={chain.chainId}
+              onClick={() => handleChainChange(chain.chainId)}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all border capitalize ${
+                selectedChainId === chain.chainId
+                  ? 'bg-primary-container text-white border-primary-container'
+                  : 'border-surface-container-high text-on-surface-variant hover:border-primary-container hover:text-on-surface'
+              }`}
+            >
+              {chain.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 p-4 bg-error-container/30 border border-error-container rounded-xl text-on-error-container text-sm font-medium">
           <strong>Error loading vaults:</strong> {error}
@@ -144,7 +188,7 @@ export default function VaultPage() {
 
       {!error && vaults.length === 0 && (
         <div className="p-8 text-center text-on-surface-variant">
-          No vaults found. Try adjusting filters or check your API key.
+          No vaults found for this chain. Try selecting a different chain.
         </div>
       )}
 
@@ -173,35 +217,18 @@ export default function VaultPage() {
 
         </div>
       )}
-
-      {/* Footer note */}
-      <div className="mt-10 flex items-center justify-between text-xs text-on-surface-variant">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-sm">verified_user</span>
-          All suggested protocols have passed APY sanity verification · APY capped at 200% · TVL &gt; $500k
-        </div>
-        <button
-          onClick={() => loadVaults()}
-          className="flex items-center gap-1.5 hover:text-on-surface transition-colors font-medium"
-        >
-          <span className="material-symbols-outlined text-sm">refresh</span>
-          Refresh Analysis
-        </button>
-      </div>
     </AppShell>
   )
 }
 
 // ─── Doctor's Choice Card (full width, on top) ────────────────────────────────
 function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing }) {
-  const apy =
-    vault.analytics.apy.total != null
-      ? (vault.analytics.apy.total * 100).toFixed(2)
-      : 'N/A'
-  const apy30d =
-    vault.analytics.apy30d != null
-      ? (vault.analytics.apy30d * 100).toFixed(2)
-      : null
+  const apy = vault.analytics.apy.total != null
+    ? (vault.analytics.apy.total * 100).toFixed(2)
+    : 'N/A'
+  const apy30d = vault.analytics.apy30d != null
+    ? (vault.analytics.apy30d * 100).toFixed(2)
+    : null
   const tvlM = (Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)
 
   return (
@@ -209,17 +236,13 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing }) {
       <div className="grid grid-cols-12 gap-0">
         {/* Left: vault info */}
         <div className="col-span-12 lg:col-span-8 p-8 space-y-6">
-          {/* Badge */}
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-on-tertiary-container text-lg">
-              verified
-            </span>
+            <span className="material-symbols-outlined text-on-tertiary-container text-lg">verified</span>
             <span className="text-xs font-black uppercase tracking-widest text-on-tertiary-container">
               Doctor's Choice
             </span>
           </div>
 
-          {/* Vault name */}
           <div>
             <h2 className="text-3xl font-headline font-extrabold text-on-surface tracking-tight">
               {vault.name}
@@ -229,44 +252,27 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing }) {
             </p>
           </div>
 
-          {/* Metrics row */}
           <div className="grid grid-cols-3 gap-8">
             <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
-                Expected APY
-              </p>
-              <p className="text-4xl font-headline font-black text-on-surface">
-                {apy}%
-              </p>
+              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Expected APY</p>
+              <p className="text-4xl font-headline font-black text-on-surface">{apy}%</p>
             </div>
             {apy30d && (
               <div>
-                <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
-                  30-Day Avg
-                </p>
-                <p className="text-4xl font-headline font-black text-on-surface-variant">
-                  {apy30d}%
-                </p>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">30-Day Avg</p>
+                <p className="text-4xl font-headline font-black text-on-surface-variant">{apy30d}%</p>
               </div>
             )}
             <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
-                Total TVL
-              </p>
-              <p className="text-4xl font-headline font-black text-on-surface">
-                ${tvlM}M
-              </p>
+              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Total TVL</p>
+              <p className="text-4xl font-headline font-black text-on-surface">${tvlM}M</p>
             </div>
           </div>
 
-          {/* Underlying tokens */}
           {vault.underlyingTokens?.length > 0 && (
             <div className="flex gap-2 flex-wrap">
               {vault.underlyingTokens.map((t, i) => (
-                <span
-                  key={i}
-                  className="px-3 py-1 bg-secondary-container text-on-secondary-container rounded-full text-xs font-bold"
-                >
+                <span key={i} className="px-3 py-1 bg-secondary-container text-on-secondary-container rounded-full text-xs font-bold">
                   {t.symbol}
                 </span>
               ))}
@@ -277,19 +283,13 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, isDepositing }) {
         {/* Right: Upgrade Impact */}
         <div className="col-span-12 lg:col-span-4 bg-primary-container p-8 flex flex-col justify-between">
           <div className="space-y-4">
-            <h3 className="font-headline font-bold text-xl text-white">
-              Upgrade Impact
-            </h3>
+            <h3 className="font-headline font-bold text-xl text-white">Upgrade Impact</h3>
             {impact ? (
               <p className="text-sm text-slate-300 leading-relaxed">
                 Switching to the recommended position will increase your projected annual revenue by{' '}
-                <span className="text-tertiary-fixed font-bold">
-                  +${Number(impact.annualGain).toLocaleString()}/yr
-                </span>{' '}
+                <span className="text-tertiary-fixed font-bold">+${Number(impact.annualGain).toLocaleString()}/yr</span>{' '}
                 with a{' '}
-                <span className="text-tertiary-fixed font-bold">
-                  +{impact.apyBoost}% APY boost
-                </span>{' '}
+                <span className="text-tertiary-fixed font-bold">+{impact.apyBoost}% APY boost</span>{' '}
                 vs the market median on a $10,000 deposit.
               </p>
             ) : (
@@ -318,11 +318,9 @@ function VaultTable({ vaults, doctorsChoiceAddress, onDeposit, depositing, onLoa
       {/* Table header */}
       <div className="px-6 py-5 border-b border-surface-container flex justify-between items-center">
         <div>
-          <h3 className="font-headline font-bold text-xl text-on-surface">
-            All Verified Vaults
-          </h3>
+          <h3 className="font-headline font-bold text-xl text-on-surface">All Verified Vaults</h3>
           <p className="text-xs text-on-surface-variant mt-0.5">
-            Sorted by highest APY · All verified: APY ≤ 200% · TVL &gt; $500k
+            Sorted by highest safe APY · Sanity-verified
           </p>
         </div>
         <span className="text-[10px] bg-surface-container px-3 py-1 rounded-full font-bold text-on-surface-variant uppercase tracking-wider">
@@ -342,17 +340,11 @@ function VaultTable({ vaults, doctorsChoiceAddress, onDeposit, depositing, onLoa
       <div>
         {vaults.map((vault, i) => {
           const isBestMatch = vault.address === doctorsChoiceAddress
-          const apy =
-            vault.analytics.apy.total != null
-              ? (vault.analytics.apy.total * 100).toFixed(2)
-              : null
-          const tvlM = (Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)
-          // Improvement vs next vault (or just show the APY rank)
-          const prevApy = i > 0 ? (vaults[i - 1].analytics?.apy?.total ?? 0) * 100 : null
-          const improvementVsPrev = prevApy && apy
-            ? null // only show improvement for first vault vs rest
+          const apy = vault.analytics.apy.total != null
+            ? (vault.analytics.apy.total * 100).toFixed(2)
             : null
-          // For first vault show "Best APY" badge, for others show improvement vs median
+          const tvlM = (Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)
+
           const medianApy = vaults.length > 2
             ? (vaults[Math.floor(vaults.length / 2)]?.analytics?.apy?.total ?? 0) * 100
             : null
@@ -370,21 +362,13 @@ function VaultTable({ vaults, doctorsChoiceAddress, onDeposit, depositing, onLoa
             >
               {/* Protocol / Chain */}
               <div className="col-span-5 flex items-center gap-4">
-                {/* Rank number */}
-                <span className="text-xl font-black text-on-surface-variant w-7 shrink-0">
-                  {i + 1}
-                </span>
-                {/* Icon placeholder */}
+                <span className="text-xl font-black text-on-surface-variant w-7 shrink-0">{i + 1}</span>
                 <div className="w-10 h-10 rounded-xl bg-surface-container flex items-center justify-center shrink-0">
-                  <span className="material-symbols-outlined text-on-surface-variant text-[18px]">
-                    account_balance
-                  </span>
+                  <span className="material-symbols-outlined text-on-surface-variant text-[18px]">account_balance</span>
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-bold text-sm text-on-surface truncate">
-                      {vault.name}
-                    </p>
+                    <p className="font-bold text-sm text-on-surface truncate">{vault.name}</p>
                     {isBestMatch && (
                       <span className="shrink-0 px-2 py-0.5 bg-on-tertiary-container text-white text-[9px] font-black rounded-full uppercase tracking-wider">
                         Best Match
@@ -394,14 +378,10 @@ function VaultTable({ vaults, doctorsChoiceAddress, onDeposit, depositing, onLoa
                   <p className="text-xs text-on-surface-variant mt-0.5 truncate">
                     {vault.protocol.name} · {vault.network ?? `Chain ${vault.chainId}`}
                   </p>
-                  {/* Underlying tokens */}
                   {vault.underlyingTokens?.length > 0 && (
                     <div className="flex gap-1 mt-1 flex-wrap">
                       {vault.underlyingTokens.slice(0, 3).map((t, ti) => (
-                        <span
-                          key={ti}
-                          className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[9px] font-bold"
-                        >
+                        <span key={ti} className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[9px] font-bold">
                           {t.symbol}
                         </span>
                       ))}
@@ -412,11 +392,7 @@ function VaultTable({ vaults, doctorsChoiceAddress, onDeposit, depositing, onLoa
 
               {/* APY */}
               <div className="col-span-2 text-right">
-                <p
-                  className={`font-headline font-black text-lg ${
-                    isBestMatch ? 'text-on-tertiary-container' : 'text-on-surface'
-                  }`}
-                >
+                <p className={`font-headline font-black text-lg ${isBestMatch ? 'text-on-tertiary-container' : 'text-on-surface'}`}>
                   {apy ? `${apy}%` : 'N/A'}
                 </p>
                 {improvementVsMedian && Number(improvementVsMedian) > 0 && (

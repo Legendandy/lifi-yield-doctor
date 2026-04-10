@@ -19,55 +19,65 @@ async function safeFetch(url) {
 }
 
 // ─── APY Sanity Filter ────────────────────────────────────────────────────────
-// Anything above 200% APY on a vault with real TVL is either:
-//   (a) a liquidity-mining spike that will vanish, or
-//   (b) a data error from the API.
-// We cap at 200% (2.0 in decimal) and also require all rolling APY fields
-// to be reasonably consistent so we're not misreporting to users.
-const MAX_REASONABLE_APY = 2.0 // 200%
-const MIN_TVL_FOR_DISPLAY = 100_000 // $100k TVL minimum
+// We define a "sane" vault as one that is:
+//   1. Has a real, positive APY that is not absurdly high
+//   2. Has a 30-day rolling APY that exists and agrees with the current APY
+//      (this is the strongest signal — data errors show up as extreme divergence)
+//   3. Has meaningful TVL (liquidity exists for the user to actually deposit)
+//
+// We use 80% (0.80) as our APY ceiling. Anything above this on a real,
+// established vault with a consistent 30d history is extremely rare.
+// Vaults offering 108,000% APY are data errors or ephemeral liquidity-mining
+// spikes that will vanish — we must not show these to users.
+const MAX_REASONABLE_APY = 0.80  // 80% — real, sustainable upper bound
+const MIN_TVL_FOR_DISPLAY = 100_000 // $100k minimum liquidity
 
 export function isVaultSane(vault) {
   const apy = vault?.analytics?.apy?.total
   const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
+  const apy30d = vault?.analytics?.apy30d
 
-  // Must have a non-null APY
+  // Must have a real, numeric APY
   if (apy == null || typeof apy !== 'number') return false
 
   // Must be positive
   if (apy <= 0) return false
 
-  // Cap at MAX_REASONABLE_APY
-  if (apy > MAX_REASONABLE_APY) return false
+  // Hard cap: no vault above 80% APY is trustworthy unless the 30d avg confirms it
+  if (apy > MAX_REASONABLE_APY) {
+    // Only allow above 80% if the 30d average is also above 50% — meaning it's
+    // a consistently high-yield vault, not a one-day spike
+    if (apy30d == null || apy30d < 0.50) return false
+    // Even then, cap at 150% absolute maximum
+    if (apy > 1.50) return false
+  }
 
   // Must have meaningful TVL
   if (tvl < MIN_TVL_FOR_DISPLAY) return false
 
-  // If we have 30d rolling data, check for extreme drift that suggests bad data
-  const apy30d = vault?.analytics?.apy30d
+  // 30d average must exist and must be in reasonable ratio to current APY.
+  // A ratio >4x or <0.1x means the current reading is a spike/error.
   if (apy30d != null && apy30d > 0) {
     const ratio = apy / apy30d
-    // If current APY is more than 5x the 30d average, something is off
-    if (ratio > 5 || ratio < 0.05) return false
+    if (ratio > 4 || ratio < 0.1) return false
   }
 
   return true
 }
 
 // ─── Fetch vaults with automatic pagination and sanity filtering ──────────────
-// Strategy:
-// 1. Sort by APY descending (so we always consider the highest first).
-// 2. Collect pages until we have enough sane vaults OR run out of data.
-// 3. Return only vaults that pass isVaultSane().
+// Fetches broadly (no minTvlUsd enforced at API level) and filters client-side.
+// This is necessary because the API's sorting can bury sane vaults behind
+// insane ones when filtered too tightly.
 export async function getVaults({
   chainId,
   asset,
   protocol,
   sortBy = 'apy',
-  minTvlUsd = 500_000,
+  minTvlUsd = 100_000,
   limit = 20,
   cursor,
-  maxPages = 5, // safety cap to avoid hammering the API
+  maxPages = 8,
 } = {}) {
   const sane = []
   let currentCursor = cursor
@@ -79,16 +89,13 @@ export async function getVaults({
     if (asset) params.set('asset', asset)
     if (protocol) params.set('protocol', protocol)
     if (sortBy) params.set('sortBy', sortBy)
-    // Fetch with a larger page to reduce round-trips
     params.set('limit', '100')
-    if (minTvlUsd != null) params.set('minTvlUsd', String(minTvlUsd))
     if (currentCursor) params.set('cursor', currentCursor)
 
     let json
     try {
       json = await safeFetch(`${BASE}/v1/earn/vaults?${params}`)
     } catch (err) {
-      // Propagate the first-page error; silently stop on subsequent pages
       if (pages === 0) throw err
       break
     }
@@ -98,27 +105,27 @@ export async function getVaults({
     pages++
 
     for (const vault of page) {
-      if (isVaultSane(vault)) {
+      const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
+      if (isVaultSane(vault) && tvl >= minTvlUsd) {
         sane.push(vault)
         if (sane.length >= limit) break
       }
     }
 
-    // No more pages
     if (!currentCursor || page.length === 0) break
   }
 
   return sane
 }
 
-// Convenience wrapper: return just the nextCursor alongside data
-// (used by VaultPage for manual pagination)
+// Paginated vault fetch for VaultPage — fetches a broad set, filters sane ones,
+// and returns cursor for the next page of RAW API data.
 export async function getVaultsPaged({
   chainId,
   asset,
   protocol,
   sortBy = 'apy',
-  minTvlUsd = 500_000,
+  minTvlUsd = 100_000,
   pageSize = 20,
   cursor,
 } = {}) {
@@ -127,16 +134,18 @@ export async function getVaultsPaged({
   if (asset) params.set('asset', asset)
   if (protocol) params.set('protocol', protocol)
   if (sortBy) params.set('sortBy', sortBy)
-  if (minTvlUsd != null) params.set('minTvlUsd', String(minTvlUsd))
-  // Fetch extra to account for sanity filtering
-  params.set('limit', String(Math.min(pageSize * 3, 100)))
+  // Fetch large batches so after filtering we still have enough sane vaults
+  params.set('limit', '100')
   if (cursor) params.set('cursor', cursor)
 
   const json = await safeFetch(`${BASE}/v1/earn/vaults?${params}`)
   const raw = Array.isArray(json) ? json : (json.data ?? [])
   const nextCursor = json.nextCursor ?? null
 
-  const sane = raw.filter(isVaultSane).slice(0, pageSize)
+  const sane = raw
+    .filter(v => isVaultSane(v) && Number(v?.analytics?.tvl?.usd ?? 0) >= minTvlUsd)
+    .slice(0, pageSize)
+
   return { data: sane, nextCursor }
 }
 
