@@ -1,203 +1,330 @@
 // src/components/DepositModal.jsx
-// Full Composer integration — deposit from ANY token on ANY chain into ANY vault
-// One click: Composer handles swap + bridge + deposit behind the scenes
+// Cross-chain deposit via LI.FI Composer
+// - Default: vault's underlying token on the vault's chain
+// - User can switch source chain (also switches wallet) and pick any token
+// - Real balances via direct RPC (no zero balance bug)
 
 import { useState, useEffect, useRef } from 'react'
-import { useAccount, useBalance, useSwitchChain, useChains } from 'wagmi'
+import { useAccount, useSwitchChain } from 'wagmi'
 import { useToast } from './ToastNotifications'
 import { executeDeposit } from '../services/executeDeposit'
+import { getTokenBalancesOnChain, SUPPORTED_CHAINS, CHAIN_TOKENS, NATIVE_ADDRESS } from '../services/tokenBalances'
 
-const CHAIN_NAMES = {
-  1: 'Ethereum',
-  10: 'Optimism',
-  56: 'BNB Chain',
-  100: 'Gnosis',
-  137: 'Polygon',
-  250: 'Fantom',
-  8453: 'Base',
-  42161: 'Arbitrum',
-  43114: 'Avalanche',
-  59144: 'Linea',
-  534352: 'Scroll',
-  7777777: 'Zora',
-  81457: 'Blast',
-  324: 'zkSync Era',
-  1101: 'Polygon zkEVM',
-}
+const CHAIN_NAMES = Object.fromEntries(SUPPORTED_CHAINS.map(c => [c.id, c.name]))
 
 function getChainName(chainId) {
   return CHAIN_NAMES[chainId] ?? `Chain ${chainId}`
 }
 
-function getTokenDecimals(vault) {
-  return vault?.underlyingTokens?.[0]?.decimals ?? 18
+// ─── Inline chain picker ───────────────────────────────────────────────────────
+function ChainPicker({ value, onChange, label }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function h(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl border-2 border-surface-container-high bg-surface-container-low hover:border-primary-container/50 transition-all text-left"
+      >
+        <div>
+          <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">{label}</p>
+          <p className="font-bold text-sm text-on-surface mt-0.5">{getChainName(value)}</p>
+        </div>
+        <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">expand_more</span>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-2xl shadow-2xl border border-surface-container z-50 overflow-hidden">
+          <div className="py-1 max-h-52 overflow-y-auto">
+            {SUPPORTED_CHAINS.map(chain => (
+              <button
+                key={chain.id}
+                type="button"
+                onClick={() => { onChange(chain.id); setOpen(false) }}
+                className={`w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-surface-container-low transition-colors
+                  ${chain.id === value ? 'bg-surface-container' : ''}`}
+              >
+                <span className={`text-sm font-bold ${chain.id === value ? 'text-on-tertiary-container' : 'text-on-surface'}`}>
+                  {chain.name}
+                </span>
+                {chain.id === value && (
+                  <span className="material-symbols-outlined text-on-tertiary-container text-[14px]">check_circle</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
-function getTokenAddress(vault) {
-  return vault?.underlyingTokens?.[0]?.address ?? null
+// ─── Token picker ──────────────────────────────────────────────────────────────
+function TokenPicker({ tokens, value, onChange, loading }) {
+  const [search, setSearch] = useState('')
+
+  const filtered = tokens.filter(t =>
+    t.symbol?.toLowerCase().includes(search.toLowerCase()) ||
+    t.name?.toLowerCase().includes(search.toLowerCase())
+  )
+
+  if (loading) {
+    return (
+      <div className="space-y-2 animate-pulse">
+        {[1, 2, 3].map(i => <div key={i} className="h-12 bg-surface-container rounded-xl" />)}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-[14px] text-on-surface-variant">search</span>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search token..."
+          className="w-full pl-8 pr-3 py-2 rounded-xl border border-surface-container-high bg-surface-container-low text-sm focus:outline-none focus:ring-2 focus:ring-primary-container/20 font-medium"
+        />
+      </div>
+      <div className="space-y-1 max-h-44 overflow-y-auto pr-1">
+        {filtered.length === 0 && (
+          <p className="text-center text-sm text-on-surface-variant py-4">No tokens found</p>
+        )}
+        {filtered.map((token, i) => {
+          const hasBalance = token.balanceFloat > 0
+          const isSelected = value?.address?.toLowerCase() === token.address?.toLowerCase()
+          return (
+            <button
+              key={token.address + i}
+              type="button"
+              onClick={() => onChange(token)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left border-2
+                ${isSelected
+                  ? 'border-primary-container/40 bg-primary-container/5'
+                  : 'border-transparent hover:bg-surface-container'
+                }`}
+            >
+              <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-xs font-black text-on-surface-variant shrink-0">
+                {token.symbol?.[0] ?? '?'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-sm text-on-surface">{token.symbol}</p>
+                <p className="text-[10px] text-on-surface-variant truncate">{token.name}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className={`font-bold text-sm ${hasBalance ? 'text-on-surface' : 'text-on-surface-variant/50'}`}>
+                  {token.formattedBalance}
+                </p>
+                {hasBalance && (
+                  <div className="w-1.5 h-1.5 rounded-full bg-on-tertiary-container ml-auto mt-0.5" />
+                )}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
-function getTokenSymbol(vault) {
-  return vault?.underlyingTokens?.[0]?.symbol ?? 'tokens'
+// ─── Step indicator ────────────────────────────────────────────────────────────
+function StepIndicator({ label, status }) {
+  return (
+    <div className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
+      status === 'active' ? 'bg-primary-container/5 border border-primary-container/20' :
+      status === 'done' ? 'opacity-50' : 'opacity-30'
+    }`}>
+      {status === 'active'
+        ? <span className="material-symbols-outlined text-primary-container text-[16px] animate-spin">progress_activity</span>
+        : status === 'done'
+          ? <span className="material-symbols-outlined text-on-tertiary-container text-[16px]">check_circle</span>
+          : <span className="material-symbols-outlined text-on-surface-variant text-[16px]">radio_button_unchecked</span>
+      }
+      <p className={`text-sm font-bold ${status === 'active' ? 'text-on-surface' : 'text-on-surface-variant'}`}>{label}</p>
+    </div>
+  )
 }
 
+// ─── Main Modal ────────────────────────────────────────────────────────────────
 export default function DepositModal({ vault, onClose, onSuccess }) {
   const { address, chainId: walletChainId } = useAccount()
   const { switchChainAsync } = useSwitchChain()
-  const chains = useChains()
   const toast = useToast()
 
+  // Vault info
   const vaultChainId = vault?.chainId
-  const tokenAddress = getTokenAddress(vault)
-  const tokenDecimals = getTokenDecimals(vault)
-  const tokenSymbol = getTokenSymbol(vault)
+  const vaultUnderlyingToken = vault?.underlyingTokens?.[0]
 
-  // Composer: user can deposit from their current chain — no need to switch
-  // But we still need to be on a supported chain for the wallet tx
-  const isSameChain = walletChainId === vaultChainId
-  const isCrossChain = !isSameChain
+  // ── Source chain — default to vault's chain ────────────────────────────────
+  const [sourceChainId, setSourceChainId] = useState(vaultChainId ?? walletChainId)
+  const [tokens, setTokens] = useState([])
+  const [loadingTokens, setLoadingTokens] = useState(false)
+  const [selectedToken, setSelectedToken] = useState(null)
 
-  // Token balance on user's CURRENT chain (whatever they're on)
-  const { data: balanceData, isLoading: balanceLoading } = useBalance({
-    address,
-    token: tokenAddress && tokenAddress !== '0x0000000000000000000000000000000000000000' ? tokenAddress : undefined,
-    chainId: walletChainId,
-  })
-
-  // Also get native ETH balance on current chain
-  const { data: nativeBalance } = useBalance({
-    address,
-    chainId: walletChainId,
-  })
-
+  // ── Deposit flow state ─────────────────────────────────────────────────────
   const [amount, setAmount] = useState('')
-  const [step, setStep] = useState('input') // input | approving | depositing | done | crosschain
+  const [txStep, setTxStep] = useState('idle') // idle | switching | approving | depositing | crosschain | done
   const [error, setError] = useState(null)
   const [crossChainTxHash, setCrossChainTxHash] = useState(null)
   const inputRef = useRef(null)
 
+  // Load tokens when source chain changes
   useEffect(() => {
-    setTimeout(() => inputRef.current?.focus(), 100)
-  }, [])
+    if (!address || !sourceChainId) return
+    setLoadingTokens(true)
+    setSelectedToken(null)
+    setAmount('')
+    setError(null)
 
-  const balanceFormatted = balanceData
-    ? `${Number(balanceData.formatted).toFixed(4)} ${balanceData.symbol}`
-    : balanceLoading ? 'Loading...' : `0 ${tokenSymbol}`
+    getTokenBalancesOnChain(address, sourceChainId).then(list => {
+      setTokens(list)
 
-  const amountNum = parseFloat(amount) || 0
-  const balanceNum = balanceData ? parseFloat(balanceData.formatted) : 0
-  const hasInsufficientBalance = amountNum > 0 && amountNum > balanceNum
-  const isValid = amountNum > 0 && !hasInsufficientBalance && amount.trim() !== ''
+      // Default selection logic:
+      // 1. Try to match the vault's underlying token on this chain (by symbol)
+      // 2. Otherwise pick the first token with a balance
+      // 3. Otherwise pick the first token
+      const vaultSymbol = vaultUnderlyingToken?.symbol?.toUpperCase()
+      const matchBySymbol = vaultSymbol
+        ? list.find(t => t.symbol?.toUpperCase() === vaultSymbol)
+        : null
+      const withBalance = list.find(t => t.balanceFloat > 0)
+      setSelectedToken(matchBySymbol ?? withBalance ?? list[0] ?? null)
+    }).catch(() => {
+      setTokens([])
+    }).finally(() => setLoadingTokens(false))
+  }, [address, sourceChainId])
+
+  // Auto-focus amount input
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 100) }, [])
+
+  const isCrossChain = sourceChainId !== vaultChainId
+  const needsWalletSwitch = walletChainId !== sourceChainId
 
   const apy = vault?.analytics?.apy?.total
   const apyDisplay = apy != null ? `${(apy * 100).toFixed(2)}%` : 'N/A'
+  const amountNum = parseFloat(amount) || 0
+  const balanceFloat = selectedToken?.balanceFloat ?? 0
+  const hasInsufficientBalance = amountNum > 0 && amountNum > balanceFloat
+  const isValid = amountNum > 0 && !hasInsufficientBalance && amount.trim() !== ''
+  const isBusy = ['switching', 'approving', 'depositing'].includes(txStep)
 
   function toRawAmount(humanAmount, decimals) {
     if (!humanAmount || isNaN(parseFloat(humanAmount))) return '0'
-    const [whole, frac = ''] = humanAmount.toString().split('.')
+    const [whole, frac = ''] = String(humanAmount).split('.')
     const fracPadded = frac.padEnd(decimals, '0').slice(0, decimals)
-    return (BigInt(whole) * BigInt(10 ** decimals) + BigInt(fracPadded || '0')).toString()
+    return (BigInt(whole || '0') * BigInt(10 ** decimals) + BigInt(fracPadded || '0')).toString()
   }
 
   function setMax() {
-    if (balanceData) {
-      const isNative = !tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000'
-      if (isNative) {
-        const maxAmount = Math.max(0, parseFloat(balanceData.formatted) - 0.002)
-        setAmount(maxAmount > 0 ? maxAmount.toFixed(6) : '0')
-      } else {
-        setAmount(balanceData.formatted)
-      }
+    if (!selectedToken) return
+    const isNative = !selectedToken.address || selectedToken.address === NATIVE_ADDRESS
+    if (isNative) {
+      const max = Math.max(0, balanceFloat - 0.002)
+      setAmount(max > 0 ? max.toFixed(6) : '0')
+    } else {
+      setAmount(selectedToken.formattedBalance)
     }
   }
 
   function setHalf() {
-    if (balanceData) {
-      setAmount((parseFloat(balanceData.formatted) / 2).toFixed(6))
+    if (!selectedToken || balanceFloat === 0) return
+    setAmount((balanceFloat / 2).toFixed(6))
+  }
+
+  // When user picks a new source chain — also switch the wallet
+  async function handleSourceChainChange(newChainId) {
+    setSourceChainId(newChainId)
+    // Switch wallet too (so the transaction is sent from the right chain)
+    if (newChainId !== walletChainId) {
+      try {
+        await switchChainAsync({ chainId: newChainId })
+      } catch {
+        // User might reject — that's ok, we still show balances for that chain
+      }
     }
   }
 
   async function handleDeposit() {
-    if (!isValid) return
+    if (!isValid || !selectedToken) return
     setError(null)
 
-    const rawAmount = toRawAmount(amount, tokenDecimals)
-
     try {
-      // For cross-chain: we don't need to switch. Composer handles it.
-      // For same-chain: also fine, just send directly.
-      setStep('approving')
-      const approvingId = toast.loading('Preparing Deposit', `Building your deposit transaction via Composer...`)
+      // If wallet isn't on the source chain yet, switch first
+      if (walletChainId !== sourceChainId) {
+        setTxStep('switching')
+        try {
+          await switchChainAsync({ chainId: sourceChainId })
+        } catch (switchErr) {
+          setTxStep('idle')
+          const rejected = switchErr?.message?.toLowerCase().includes('rejected')
+          setError(rejected ? 'Please approve the network switch.' : `Could not switch to ${getChainName(sourceChainId)}.`)
+          toast.error('Network Switch Failed', rejected ? 'You rejected the switch.' : `Failed to switch to ${getChainName(sourceChainId)}.`)
+          return
+        }
+      }
+
+      setTxStep('approving')
+      const rawAmount = toRawAmount(amount, selectedToken.decimals)
+      const approvingId = toast.loading('Preparing Deposit', 'Building transaction via Composer...')
 
       const result = await executeDeposit({
         vault,
-        fromToken: vault.underlyingTokens?.[0] ?? {
-          address: tokenAddress,
-          decimals: tokenDecimals,
-          symbol: tokenSymbol,
-        },
+        fromToken: selectedToken,
         fromAmount: rawAmount,
         userAddress: address,
+        fromChainId: sourceChainId,
         onApprovalSent: () => {
           toast.update(approvingId, {
             type: 'loading',
             title: 'Approve Token',
-            message: `Requesting approval for ${tokenSymbol}...`,
+            message: `Approving ${selectedToken.symbol}...`,
           })
         },
         onApprovalDone: () => {
-          toast.update(approvingId, {
-            type: 'success',
-            title: 'Token Approved',
-            message: `${tokenSymbol} approved`,
-            duration: 2000,
-          })
-          setStep('depositing')
+          toast.update(approvingId, { type: 'success', title: 'Approved', message: `${selectedToken.symbol} approved`, duration: 2000 })
+          setTxStep('depositing')
         },
         onDepositSent: (txHash) => {
           toast.dismiss(approvingId)
-          if (isCrossChain) {
-            toast.tx('Cross-Chain Deposit Sent', txHash, { title: 'Bridge + Deposit In Progress' })
-          } else {
-            toast.tx('Deposit Submitted', txHash, { title: 'Transaction Sent' })
-          }
-          setStep('depositing')
+          isCrossChain
+            ? toast.tx('Cross-Chain Deposit Sent', txHash, { title: 'Bridge + Deposit In Progress' })
+            : toast.tx('Deposit Submitted', txHash, { title: 'Transaction Sent' })
+          setTxStep('depositing')
         },
         onCrossChainPending: (txHash) => {
           setCrossChainTxHash(txHash)
-          setStep('crosschain')
+          setTxStep('crosschain')
         },
       })
 
       if (!result.isCrossChain) {
-        setStep('done')
-        toast.success(
-          'Deposit Successful! 🎉',
-          `${amount} ${tokenSymbol} deposited into ${vault.name}`,
-          { duration: 8000 }
-        )
+        setTxStep('done')
+        toast.success('Deposit Successful! 🎉', `${amount} ${selectedToken.symbol} deposited into ${vault.name}`, { duration: 8000 })
         onSuccess?.({ vault, amount, txHash: result?.txHash })
       } else {
-        setStep('crosschain')
+        setTxStep('crosschain')
         setCrossChainTxHash(result.txHash)
       }
     } catch (err) {
       const msg = err?.message ?? ''
-      const isRejected = msg.toLowerCase().includes('user rejected') ||
-        msg.toLowerCase().includes('user denied') ||
-        msg.toLowerCase().includes('rejected')
-
-      setStep('input')
+      const isRejected = msg.toLowerCase().includes('user rejected') || msg.toLowerCase().includes('rejected')
+      setTxStep('idle')
 
       if (isRejected) {
         toast.error('Transaction Rejected', 'You cancelled the transaction.')
         setError('Transaction was rejected.')
       } else if (msg.includes('No routes found') || msg.includes('no routes')) {
-        toast.error('No Route Found', 'This vault may not support deposits from your current token/chain.')
-        setError('No deposit route found. Try switching to the vault\'s native chain.')
-      } else if (msg.includes('insufficient')) {
-        toast.error('Insufficient Balance', 'Not enough tokens for this deposit.')
-        setError('Insufficient balance.')
+        toast.error('No Route Found', 'Try a different source token or chain.')
+        setError('No deposit route found. Try a different source token or chain combination.')
       } else {
         toast.error('Deposit Failed', msg.slice(0, 120))
         setError(msg.slice(0, 120))
@@ -205,7 +332,7 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
     }
   }
 
-  const isBusy = step === 'approving' || step === 'depositing'
+  const showForm = txStep === 'idle' || txStep === 'switching' || txStep === 'approving' || txStep === 'depositing'
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
@@ -214,13 +341,15 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
         onClick={!isBusy ? onClose : undefined}
       />
 
-      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 border-b border-surface-container">
+      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+        {/* ── Header ── */}
+        <div className="px-6 pt-6 pb-4 border-b border-surface-container shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-headline font-extrabold text-xl text-on-surface">Deposit</h2>
-              <p className="text-xs text-on-surface-variant mt-0.5 font-medium">{vault?.name}</p>
+              <p className="text-xs text-on-surface-variant mt-0.5 font-medium truncate max-w-[280px]">
+                {vault?.name} · {getChainName(vaultChainId)} · {apyDisplay} APY
+              </p>
             </div>
             <button
               onClick={onClose}
@@ -232,54 +361,63 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
           </div>
         </div>
 
-        <div className="p-6 space-y-5">
-          {/* Vault summary */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-surface-container rounded-xl p-3 text-center">
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">APY</p>
-              <p className="font-headline font-black text-lg text-on-tertiary-container">{apyDisplay}</p>
-            </div>
-            <div className="bg-surface-container rounded-xl p-3 text-center">
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Protocol</p>
-              <p className="font-bold text-sm text-on-surface truncate">{vault?.protocol?.name}</p>
-            </div>
-            <div className="bg-surface-container rounded-xl p-3 text-center">
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Network</p>
-              <p className="font-bold text-sm text-on-surface truncate">{getChainName(vaultChainId)}</p>
-            </div>
-          </div>
+        {/* ── Body ── */}
+        <div className="p-6 overflow-y-auto flex-1 space-y-5">
 
-          {/* Composer cross-chain badge */}
-          {isCrossChain && step !== 'done' && step !== 'crosschain' && (
+          {/* Cross-chain badge */}
+          {isCrossChain && showForm && (
             <div className="flex items-center gap-3 p-3 bg-on-tertiary-container/5 border border-on-tertiary-container/20 rounded-xl">
               <span className="material-symbols-outlined text-on-tertiary-container text-[18px] shrink-0">bolt</span>
+              <p className="text-xs font-medium text-on-surface">
+                Cross-chain: Composer will bridge from <strong>{getChainName(sourceChainId)}</strong> → <strong>{getChainName(vaultChainId)}</strong> in one transaction.
+              </p>
+            </div>
+          )}
+
+          {/* ── Source chain picker ── */}
+          {showForm && (
+            <div className="space-y-3">
+              <ChainPicker
+                value={sourceChainId}
+                onChange={handleSourceChainChange}
+                label="Deposit from chain"
+              />
+
+              {/* Token picker */}
               <div>
-                <p className="font-bold text-sm text-on-surface">Cross-Chain via Composer</p>
-                <p className="text-xs text-on-surface-variant mt-0.5">
-                  Depositing from {getChainName(walletChainId)} → {getChainName(vaultChainId)}. Composer handles bridge + deposit in one transaction.
-                </p>
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant block mb-2">
+                  Token to deposit
+                </label>
+                <TokenPicker
+                  tokens={tokens}
+                  value={selectedToken}
+                  onChange={setSelectedToken}
+                  loading={loadingTokens}
+                />
               </div>
             </div>
           )}
 
-          {/* Amount input */}
-          {step !== 'done' && step !== 'crosschain' && (
+          {/* ── Amount input ── */}
+          {showForm && selectedToken && !loadingTokens && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-                  Amount ({balanceData?.symbol ?? tokenSymbol})
+                  Amount
                 </label>
                 <span className="text-xs text-on-surface-variant font-medium">
-                  Balance: {balanceFormatted}
+                  Balance: <span className={selectedToken.balanceFloat > 0 ? 'text-on-tertiary-container font-bold' : ''}>
+                    {selectedToken.formattedBalance}
+                  </span> {selectedToken.symbol}
                 </span>
               </div>
 
               <div className={`relative flex items-center border-2 rounded-xl transition-all ${
                 hasInsufficientBalance
                   ? 'border-red-400 bg-red-50'
-                  : amount && !hasInsufficientBalance
-                  ? 'border-on-tertiary-container/50 bg-surface-container-low'
-                  : 'border-surface-container-high bg-surface-container-low hover:border-primary-container/40'
+                  : amount && isValid
+                    ? 'border-on-tertiary-container/50 bg-surface-container-low'
+                    : 'border-surface-container-high bg-surface-container-low hover:border-primary-container/40'
               }`}>
                 <input
                   ref={inputRef}
@@ -293,11 +431,11 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
                   className="flex-1 px-4 py-3.5 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50"
                 />
                 <div className="flex items-center gap-1 pr-3">
-                  <button onClick={setHalf} disabled={isBusy || !balanceData}
+                  <button onClick={setHalf} disabled={isBusy || balanceFloat === 0}
                     className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-on-surface-variant bg-surface-container rounded-lg hover:bg-surface-container-high transition-colors disabled:opacity-40">
                     50%
                   </button>
-                  <button onClick={setMax} disabled={isBusy || !balanceData}
+                  <button onClick={setMax} disabled={isBusy || balanceFloat === 0}
                     className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-on-tertiary-container bg-on-tertiary-container/10 rounded-lg hover:bg-on-tertiary-container/20 transition-colors disabled:opacity-40">
                     MAX
                   </button>
@@ -308,62 +446,56 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
                 <div className="flex items-center gap-2 text-red-600">
                   <span className="material-symbols-outlined text-[14px]">error</span>
                   <p className="text-xs font-bold">
-                    Insufficient balance. You have {balanceData ? Number(balanceData.formatted).toFixed(4) : '0'} {balanceData?.symbol ?? tokenSymbol}.
+                    Insufficient balance. You have {selectedToken.formattedBalance} {selectedToken.symbol}.
                   </p>
                 </div>
               )}
 
-              {/* Projected earnings */}
               {isValid && apy != null && (
                 <div className="flex items-center justify-between p-2.5 bg-on-tertiary-container/5 rounded-xl border border-on-tertiary-container/10">
                   <p className="text-xs text-on-surface-variant font-medium">Projected earnings</p>
                   <div className="text-right">
                     <p className="text-xs font-black text-on-tertiary-container">
-                      +{(amountNum * apy / 12).toFixed(4)} {tokenSymbol}/mo
+                      +{(amountNum * apy / 12).toFixed(4)} {selectedToken.symbol}/mo
                     </p>
-                    <p className="text-[10px] text-on-surface-variant">
-                      +{(amountNum * apy).toFixed(4)} {tokenSymbol}/yr
-                    </p>
+                    <p className="text-[10px] text-on-surface-variant">+{(amountNum * apy).toFixed(4)}/yr</p>
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* Error message */}
-          {error && step !== 'done' && (
+          {/* ── Error ── */}
+          {error && txStep === 'idle' && (
             <div className="flex items-start gap-2 p-3 bg-error-container/20 border border-error-container rounded-xl">
               <span className="material-symbols-outlined text-error text-[16px] shrink-0 mt-0.5">error</span>
               <p className="text-xs font-medium text-on-error-container">{error}</p>
             </div>
           )}
 
-          {/* Busy status */}
+          {/* ── Tx progress ── */}
           {isBusy && (
             <div className="space-y-2">
-              <StepIndicator label="Build Composer Route" status={step === 'approving' ? 'active' : 'done'} />
-              <StepIndicator label="Approve Token" status={step === 'approving' ? 'active' : step === 'depositing' ? 'done' : 'pending'} />
-              <StepIndicator label="Submit Deposit" status={step === 'depositing' ? 'active' : 'pending'} />
+              {needsWalletSwitch && <StepIndicator label={`Switch to ${getChainName(sourceChainId)}`} status={txStep === 'switching' ? 'active' : 'done'} />}
+              <StepIndicator label="Build Composer Route" status={txStep === 'approving' ? 'active' : txStep === 'depositing' ? 'done' : 'pending'} />
+              <StepIndicator label="Approve Token" status={txStep === 'approving' ? 'active' : txStep === 'depositing' ? 'done' : 'pending'} />
+              <StepIndicator label="Submit Deposit" status={txStep === 'depositing' ? 'active' : 'pending'} />
             </div>
           )}
 
-          {/* Cross-chain pending */}
-          {step === 'crosschain' && (
+          {/* ── Cross-chain pending ── */}
+          {txStep === 'crosschain' && (
             <div className="text-center space-y-4 py-4">
               <div className="w-16 h-16 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
                 <span className="material-symbols-outlined text-on-tertiary-container text-3xl animate-spin">autorenew</span>
               </div>
-              <h3 className="font-headline font-extrabold text-xl text-on-surface">Cross-Chain In Progress</h3>
+              <h3 className="font-headline font-extrabold text-xl text-on-surface">Bridge In Progress</h3>
               <p className="text-sm text-on-surface-variant">
-                Your deposit is bridging from {getChainName(walletChainId)} to {getChainName(vaultChainId)}. This takes 1–5 minutes.
+                {getChainName(sourceChainId)} → {getChainName(vaultChainId)}. Takes 1–5 minutes.
               </p>
               {crossChainTxHash && (
-                <a
-                  href={`https://explorer.li.fi/?txHash=${crossChainTxHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-on-tertiary-container font-bold hover:underline"
-                >
+                <a href={`https://explorer.li.fi/?txHash=${crossChainTxHash}`} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-on-tertiary-container font-bold hover:underline">
                   <span className="material-symbols-outlined text-[14px]">open_in_new</span>
                   Track on LI.FI Explorer
                 </a>
@@ -371,50 +503,54 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
             </div>
           )}
 
-          {/* Done state */}
-          {step === 'done' && (
+          {/* ── Done ── */}
+          {txStep === 'done' && (
             <div className="text-center space-y-3 py-4">
               <div className="w-16 h-16 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
                 <span className="material-symbols-outlined text-on-tertiary-container text-3xl">check_circle</span>
               </div>
               <h3 className="font-headline font-extrabold text-xl text-on-surface">Deposit Complete!</h3>
               <p className="text-sm text-on-surface-variant">
-                {amount} {tokenSymbol} is now earning {apyDisplay} APY in {vault?.name}.
+                {amount} {selectedToken?.symbol} is now earning {apyDisplay} APY in {vault?.name}.
               </p>
             </div>
           )}
 
-          {/* Action button */}
-          {step !== 'done' && step !== 'crosschain' ? (
+          {/* ── Action button ── */}
+          {txStep !== 'done' && txStep !== 'crosschain' ? (
             <button
               onClick={handleDeposit}
-              disabled={!isValid || isBusy}
+              disabled={!isValid || isBusy || !selectedToken || loadingTokens}
               className={`w-full py-4 rounded-2xl font-headline font-black text-base transition-all flex items-center justify-center gap-2
-                ${isValid && !isBusy
+                ${isValid && !isBusy && selectedToken && !loadingTokens
                   ? 'bg-primary-container text-white hover:opacity-90 shadow-md'
                   : 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                }
-              `}
+                }`}
             >
               {isBusy ? (
                 <>
                   <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
-                  {step === 'approving' && 'Preparing...'}
-                  {step === 'depositing' && 'Depositing...'}
+                  {txStep === 'switching' && `Switching to ${getChainName(sourceChainId)}...`}
+                  {txStep === 'approving' && 'Preparing...'}
+                  {txStep === 'depositing' && 'Depositing...'}
                 </>
               ) : isCrossChain ? (
                 <>
                   <span className="material-symbols-outlined text-[18px]">bolt</span>
-                  Deposit {amount ? `${amount} ${balanceData?.symbol ?? tokenSymbol}` : ''} via Composer
+                  {amount
+                    ? `Deposit ${amount} ${selectedToken?.symbol ?? ''} via Composer`
+                    : 'Enter an amount'}
                 </>
               ) : (
                 <>
                   <span className="material-symbols-outlined text-[18px]">add_circle</span>
-                  Deposit {amount ? `${amount} ${tokenSymbol}` : ''}
+                  {amount
+                    ? `Deposit ${amount} ${selectedToken?.symbol ?? ''}`
+                    : 'Enter an amount'}
                 </>
               )}
             </button>
-          ) : step === 'crosschain' ? (
+          ) : txStep === 'crosschain' ? (
             <button
               onClick={() => { onSuccess?.({ vault, amount }); onClose() }}
               className="w-full py-4 rounded-2xl font-headline font-black text-base bg-surface-container text-on-surface-variant hover:bg-surface-container-high transition-all"
@@ -431,27 +567,6 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function StepIndicator({ label, status, skip }) {
-  if (skip) return null
-  return (
-    <div className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
-      status === 'active' ? 'bg-primary-container/5 border border-primary-container/20' :
-      status === 'done' ? 'opacity-50' : 'opacity-30'
-    }`}>
-      {status === 'active' ? (
-        <span className="material-symbols-outlined text-primary-container text-[16px] animate-spin">progress_activity</span>
-      ) : status === 'done' ? (
-        <span className="material-symbols-outlined text-on-tertiary-container text-[16px]">check_circle</span>
-      ) : (
-        <span className="material-symbols-outlined text-on-surface-variant text-[16px]">radio_button_unchecked</span>
-      )}
-      <p className={`text-sm font-bold ${status === 'active' ? 'text-on-surface' : 'text-on-surface-variant'}`}>
-        {label}
-      </p>
     </div>
   )
 }

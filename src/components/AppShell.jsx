@@ -1,6 +1,7 @@
 // src/components/AppShell.jsx
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAccount, useDisconnect } from 'wagmi'
+import ChainSelector from './ChainSelector'
 
 export default function AppShell({ children }) {
   const { address } = useAccount()
@@ -13,9 +14,9 @@ export default function AppShell({ children }) {
     : ''
 
   const navItems = [
-    { path: '/dashboard', icon: 'dashboard', label: 'Dashboard' },
-    { path: '/vaults', icon: 'account_balance', label: 'Vaults' },
-    { path: '/compare', icon: 'compare_arrows', label: 'Compare APY' },
+    { path: '/dashboard', icon: 'dashboard',        label: 'Dashboard'   },
+    { path: '/vaults',    icon: 'account_balance',  label: 'Vaults'      },
+    { path: '/compare',   icon: 'compare_arrows',   label: 'Compare APY' },
   ]
 
   return (
@@ -30,7 +31,11 @@ export default function AppShell({ children }) {
             Yield Doctor
           </span>
         </div>
+
         <div className="flex items-center gap-3">
+          {/* Network switcher */}
+          <ChainSelector />
+          {/* Wallet address */}
           <span className="text-sm font-mono text-on-surface-variant bg-surface-container px-3 py-1.5 rounded-full">
             {shortAddr}
           </span>
