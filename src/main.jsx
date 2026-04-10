@@ -25,7 +25,6 @@ import { ToastProvider } from './components/ToastNotifications'
 import '@rainbow-me/rainbowkit/styles.css'
 import './index.css'
 
-// Chains not yet in wagmi's default exports — define them manually
 const unichain = {
   id: 130,
   name: 'Unichain',
@@ -47,11 +46,12 @@ const katana = {
   rpcUrls: { default: { http: ['https://rpc.katana.network'] } },
 }
 
+// Monad MAINNET — chain ID 143 (10143 = testnet, do NOT use)
 const monad = {
-  id: 10143,
+  id: 143,
   name: 'Monad',
   nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
-  rpcUrls: { default: { http: ['https://testnet-rpc.monad.xyz'] } },
+  rpcUrls: { default: { http: ['https://monad-mainnet.drpc.org'] } },
 }
 
 const config = getDefaultConfig({
