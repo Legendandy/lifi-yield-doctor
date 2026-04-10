@@ -22,6 +22,8 @@ import {
 } from 'wagmi/chains'
 import { BrowserRouter } from 'react-router-dom'
 import { ToastProvider } from './components/ToastNotifications'
+import { createConfig as createLiFiConfig, EVM } from '@lifi/sdk'
+import { getWalletClient, switchChain } from '@wagmi/core'
 import '@rainbow-me/rainbowkit/styles.css'
 import './index.css'
 
@@ -46,7 +48,6 @@ const katana = {
   rpcUrls: { default: { http: ['https://rpc.katana.network'] } },
 }
 
-// Monad MAINNET — chain ID 143 (10143 = testnet, do NOT use)
 const monad = {
   id: 143,
   name: 'Monad',
@@ -54,7 +55,7 @@ const monad = {
   rpcUrls: { default: { http: ['https://monad-mainnet.drpc.org'] } },
 }
 
-const config = getDefaultConfig({
+export const wagmiConfig = getDefaultConfig({
   appName: 'Yield Doctor',
   projectId: 'YOUR_WALLETCONNECT_PROJECT_ID',
   chains: [
@@ -78,11 +79,27 @@ const config = getDefaultConfig({
   ],
 })
 
+// ─── Configure LI.FI SDK with the wagmi EVM provider ─────────────────────────
+// This is required for getTokenBalances to work correctly.
+// The EVM provider hooks into wagmi so balance reads use the connected wallet's RPC.
+createLiFiConfig({
+  integrator: 'yield-doctor',
+  providers: [
+    EVM({
+      getWalletClient: () => getWalletClient(wagmiConfig),
+      switchChain: async (chainId) => {
+        const chain = await switchChain(wagmiConfig, { chainId })
+        return getWalletClient(wagmiConfig, { chainId: chain.id })
+      },
+    }),
+  ],
+})
+
 const queryClient = new QueryClient()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <WagmiProvider config={config}>
+    <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
           <BrowserRouter>
