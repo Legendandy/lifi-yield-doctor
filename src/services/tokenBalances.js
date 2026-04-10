@@ -37,6 +37,40 @@ export function isNativeToken(address) {
   return a === NATIVE_ADDRESS || a === NATIVE_ADDRESS_ALT
 }
 
+// ─── Stablecoin detection ─────────────────────────────────────────────────────
+// These symbols get 2 decimal places; everything else keeps full precision
+const STABLECOIN_SYMBOLS = new Set([
+  'USDC', 'USDT', 'DAI', 'USDE', 'USDE', 'USDe', 'BUSD', 'TUSD', 'FRAX',
+  'LUSD', 'SUSD', 'EURC', 'EURS', 'EURT', 'USDD', 'USDP', 'GUSD', 'HUSD',
+  'CUSD', 'MUSD', 'XUSD', 'ALUSD', 'CRVUSD', 'MKUSD', 'PYUSD', 'FDUSD',
+  'WXDAI', 'XDAI',
+])
+
+function isStablecoin(symbol) {
+  if (!symbol) return false
+  const s = symbol.toUpperCase()
+  // Match exact symbol or common patterns like USDC.e, USDT.e, DAI.e
+  if (STABLECOIN_SYMBOLS.has(s)) return true
+  // Also match if it starts with USD or ends with USD
+  if (s.startsWith('USD') || s.endsWith('USD')) return true
+  if (s.startsWith('EUR') && s.length <= 6) return true
+  return false
+}
+
+// ─── Format helpers ───────────────────────────────────────────────────────────
+function formatBalance(f, symbol) {
+  if (f === 0) return '0.00'
+  if (isStablecoin(symbol)) {
+    // Stablecoins: always 2 decimal places
+    return f.toFixed(2)
+  }
+  // Non-stablecoins (ETH, BTC, etc.): preserve meaningful precision
+  if (f < 0.0001) return f.toFixed(8)
+  if (f < 1)      return f.toFixed(6)
+  if (f < 1000)   return f.toFixed(4)
+  return f.toLocaleString(undefined, { maximumFractionDigits: 4 })
+}
+
 // ─── Fallback static token list (used when SDK token fetch fails) ─────────────
 const FALLBACK_TOKENS = {
   1: [
@@ -131,15 +165,6 @@ const FALLBACK_TOKENS = {
 // Keep for WithdrawModal backwards compat
 export const CHAIN_TOKENS = FALLBACK_TOKENS
 
-// ─── Format helpers ───────────────────────────────────────────────────────────
-function formatBalance(f) {
-  if (f === 0) return '0'
-  if (f < 0.0001) return f.toFixed(8)
-  if (f < 1)      return f.toFixed(6)
-  if (f < 1000)   return f.toFixed(4)
-  return f.toLocaleString(undefined, { maximumFractionDigits: 2 })
-}
-
 // ─── Main export ──────────────────────────────────────────────────────────────
 /**
  * Fetches token list via LI.FI SDK getTokens, then balances via getTokenBalances.
@@ -148,6 +173,9 @@ function formatBalance(f) {
  * string in the token's smallest unit (e.g. "1000000" = 1 USDC with 6 decimals,
  * NOT 1,000,000 USDC). We use viem's formatUnits(amount, decimals) to convert
  * to a human-readable float before displaying or using in calculations.
+ *
+ * Stablecoins (USDC, USDT, DAI, USDe, EURC, etc.) are formatted to 2 decimal places.
+ * All other tokens (ETH, BTC, BNB, etc.) retain full meaningful precision.
  */
 export async function getTokenBalancesOnChain(walletAddress, chainId) {
   if (!walletAddress || !chainId) return []
@@ -193,7 +221,7 @@ export async function getTokenBalancesOnChain(walletAddress, chainId) {
     console.warn(`[getTokenBalancesOnChain] getTokenBalances failed:`, err.message)
     return sorted.map(t => ({
       ...t,
-      formattedBalance: '0',
+      formattedBalance: isStablecoin(t.symbol) ? '0.00' : '0',
       balanceRaw: '0',
       balanceFloat: 0,
     }))
@@ -221,7 +249,7 @@ export async function getTokenBalancesOnChain(walletAddress, chainId) {
     return {
       ...token,
       logoURI: token.logoURI ?? ta?.logoURI ?? null,
-      formattedBalance: formatBalance(floatVal),
+      formattedBalance: formatBalance(floatVal, token.symbol),
       balanceRaw: rawAmount,
       balanceFloat: floatVal,
     }

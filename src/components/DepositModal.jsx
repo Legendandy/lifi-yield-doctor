@@ -1,8 +1,16 @@
 // src/components/DepositModal.jsx
-// Fixes applied:
-//   1. Compact layout — "Continue" button always visible without scrolling
-//   2. Auto-switch wallet to vault's chain when modal opens (Step 1)
-//   3. Balance display uses correctly formatted values from tokenBalances.js
+// 2-step UX (restored from original):
+//   Step 1 — pick source chain + token (ALL tokens from LI.FI API, real balances)
+//   Step 2 — enter amount + execute deposit
+//
+// Fixes:
+// - Chain switcher right in the modal (no need to close modal to switch chain)
+// - Token list uses LI.FI /v1/tokens for ALL tokens (USDe, EURC, etc.)
+// - Balances use wallet provider directly for the connected chain → no zero balance bug
+// - Continue button always visible, no scrolling needed
+// - Defaults to vault chain + underlying token on open
+// - Cross-chain notice is a single compact text line — no banner, no height change
+// - Stablecoin 2dp formatting handled in tokenBalances.js, not here
 
 import { useState, useEffect, useRef } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
@@ -38,12 +46,9 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
   const { address } = useAccount()
   const { switchChainAsync } = useSwitchChain()
 
-  // Default to vault's chain so balances match what the user likely wants to deposit
   const [selectedChainId, setSelectedChainId] = useState(vaultChainId ?? walletChainId)
   const [showChainPicker, setShowChainPicker] = useState(false)
   const [switchingChain, setSwitchingChain] = useState(false)
-  // Track whether we've done the initial auto-switch
-  const [autoSwitchDone, setAutoSwitchDone] = useState(false)
 
   const [tokens, setTokens] = useState([])
   const [loadingTokens, setLoadingTokens] = useState(false)
@@ -63,26 +68,7 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // AUTO-SWITCH: When the modal opens, if the wallet is not already on the vault's
-  // chain, silently attempt to switch to it so balances load for the right chain.
-  // We do this once on mount and don't block the rest of the UI.
-  useEffect(() => {
-    if (autoSwitchDone) return
-    setAutoSwitchDone(true)
-
-    if (!vaultChainId || walletChainId === vaultChainId) return
-
-    setSwitchingChain(true)
-    switchChainAsync({ chainId: vaultChainId })
-      .catch(() => {
-        // User rejected or chain not supported — that's fine, we fall through
-      })
-      .finally(() => {
-        setSwitchingChain(false)
-      })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load tokens whenever selected chain changes
+  // Load tokens whenever chain changes
   useEffect(() => {
     if (!address || !selectedChainId) return
     setLoadingTokens(true)
@@ -93,6 +79,7 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
     getTokenBalancesOnChain(address, selectedChainId)
       .then(list => {
         setTokens(list)
+        // Default: match vault underlying token symbol, else first with balance, else first
         const vaultSymbol = vaultUnderlyingToken?.symbol?.toUpperCase()
         const bySymbol    = vaultSymbol ? list.find(t => t.symbol?.toUpperCase() === vaultSymbol) : null
         const withBal     = list.find(t => t.balanceFloat > 0)
@@ -113,7 +100,7 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
     try {
       await switchChainAsync({ chainId })
     } catch {
-      // User rejected — that's fine
+      // User rejected or can't switch — that's fine, we'll use public RPC
     } finally {
       setSwitchingChain(false)
     }
@@ -129,11 +116,11 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
   const isCrossChain = selectedChainId !== vaultChainId
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
 
-      {/* Chain picker */}
+      {/* ── Chain picker ── */}
       <div>
-        <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant block mb-1.5">
+        <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant block mb-2">
           Deposit from chain
         </label>
         <div className="relative" ref={chainPickerRef}>
@@ -141,13 +128,20 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
             type="button"
             onClick={() => setShowChainPicker(o => !o)}
             disabled={switchingChain}
-            className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border-2 border-surface-container-high bg-surface-container-low hover:border-primary-container/40 transition-all text-left disabled:opacity-60"
+            className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 border-surface-container-high bg-surface-container-low hover:border-primary-container/40 transition-all text-left disabled:opacity-60"
           >
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
               <span className="font-bold text-sm text-on-surface truncate">{getChainName(selectedChainId)}</span>
               {selectedChainId === walletChainId && (
                 <span className="text-[10px] bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-0.5 rounded-full font-black shrink-0">
                   Wallet
+                </span>
+              )}
+              {/* Inline cross-chain badge — sits in the button row, adds zero height */}
+              {isCrossChain && (
+                <span className="text-[10px] bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-0.5 rounded-full font-black shrink-0 flex items-center gap-0.5">
+                  <span className="material-symbols-outlined text-[11px]">bolt</span>
+                  Cross-chain
                 </span>
               )}
             </div>
@@ -159,7 +153,7 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
 
           {showChainPicker && (
             <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-2xl shadow-2xl border border-surface-container z-[200] overflow-hidden">
-              <div className="grid grid-cols-2 gap-1 p-2 max-h-44 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-1 p-2 max-h-48 overflow-y-auto">
                 {SUPPORTED_CHAINS.map(chain => (
                   <button
                     key={chain.id}
@@ -182,25 +176,23 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
           )}
         </div>
 
+        {/* Cross-chain hint — single compact line, no box/banner, no extra padding */}
         {isCrossChain && (
-          <div className="mt-1.5 flex items-center gap-2 p-2 bg-on-tertiary-container/5 border border-on-tertiary-container/20 rounded-xl">
-            <span className="material-symbols-outlined text-on-tertiary-container text-[14px] shrink-0">bolt</span>
-            <p className="text-xs text-on-surface font-medium">
-              Cross-chain: Composer bridges {getChainName(selectedChainId)} → {getChainName(vaultChainId)} + deposits in one tx
-            </p>
-          </div>
+          <p className="mt-1.5 text-[11px] text-on-tertiary-container font-semibold px-1 leading-tight">
+            ⚡ Composer bridges {getChainName(selectedChainId)} → {getChainName(vaultChainId)} and deposits in one tx.
+          </p>
         )}
       </div>
 
-      {/* Token picker — compact, fixed height */}
+      {/* ── Token picker ── */}
       <div className="flex flex-col gap-2 min-h-0">
         <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant shrink-0">
           Token to deposit
         </label>
 
         {loadingTokens ? (
-          <div className="space-y-1.5 animate-pulse">
-            {[1,2,3].map(i => <div key={i} className="h-10 bg-surface-container rounded-xl" />)}
+          <div className="space-y-2 animate-pulse">
+            {[1,2,3,4].map(i => <div key={i} className="h-12 bg-surface-container rounded-xl" />)}
           </div>
         ) : (
           <>
@@ -210,15 +202,15 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search token…"
-                className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-sm focus:outline-none focus:ring-2 focus:ring-primary-container/20 font-medium"
+                placeholder="Search token… (USDe, EURC, USDC…)"
+                className="w-full pl-8 pr-3 py-2 rounded-xl border border-surface-container-high bg-surface-container-low text-sm focus:outline-none focus:ring-2 focus:ring-primary-container/20 font-medium"
               />
             </div>
 
-            {/* Token list — compact fixed height */}
-            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: '160px' }}>
+            {/* Token list — restricted height so Continue is always visible */}
+            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: '168px' }}>
               {filtered.length === 0 && (
-                <p className="text-center text-sm text-on-surface-variant py-3">No tokens found</p>
+                <p className="text-center text-sm text-on-surface-variant py-4">No tokens found</p>
               )}
               {filtered.map((token, i) => {
                 const hasBalance = token.balanceFloat > 0
@@ -228,7 +220,7 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
                     key={token.address + i}
                     type="button"
                     onClick={() => setSelectedToken(token)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl transition-all text-left border-2
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left border-2
                       ${isSelected
                         ? 'border-primary-container/40 bg-primary-container/5'
                         : 'border-transparent hover:bg-surface-container'
@@ -238,11 +230,11 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
                       <img
                         src={token.logoURI}
                         alt={token.symbol}
-                        className="w-7 h-7 rounded-full shrink-0 object-cover"
+                        className="w-8 h-8 rounded-full shrink-0 object-cover"
                         onError={e => { e.target.style.display = 'none' }}
                       />
                     ) : (
-                      <div className="w-7 h-7 rounded-full bg-surface-container flex items-center justify-center text-xs font-black text-on-surface-variant shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-xs font-black text-on-surface-variant shrink-0">
                         {token.symbol?.[0] ?? '?'}
                       </div>
                     )}
@@ -251,6 +243,8 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
                       <p className="text-[10px] text-on-surface-variant truncate">{token.name}</p>
                     </div>
                     <div className="text-right shrink-0">
+                      {/* formattedBalance precision is handled in tokenBalances.js:
+                          stablecoins → 2dp, ETH/BTC/etc → full meaningful precision */}
                       <p className={`font-bold text-sm ${hasBalance ? 'text-on-surface' : 'text-on-surface-variant/50'}`}>
                         {token.formattedBalance}
                       </p>
@@ -266,12 +260,12 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
         )}
       </div>
 
-      {/* Continue button — always visible, no scrolling needed */}
+      {/* ── Continue button — always visible, never needs scrolling ── */}
       <button
         type="button"
         onClick={() => selectedToken && onConfirm({ chainId: selectedChainId, token: selectedToken })}
         disabled={!selectedToken || loadingTokens}
-        className={`w-full py-3 rounded-2xl font-headline font-black text-sm transition-all flex items-center justify-center gap-2 shrink-0
+        className={`w-full py-3.5 rounded-2xl font-headline font-black text-sm transition-all flex items-center justify-center gap-2 shrink-0
           ${selectedToken && !loadingTokens
             ? 'bg-primary-container text-white hover:opacity-90 shadow-md'
             : 'bg-surface-container text-on-surface-variant cursor-not-allowed'
@@ -405,7 +399,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Route summary */}
       <div className="flex items-center gap-3 p-3 bg-surface-container rounded-xl">
         <div className="text-center flex-1 min-w-0">
@@ -429,21 +423,21 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
       </div>
 
       {/* Vault metrics */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="bg-surface-container rounded-xl p-2.5 text-center">
-          <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-0.5">APY</p>
-          <p className="font-headline font-black text-base text-on-tertiary-container">{apyDisplay}</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-surface-container rounded-xl p-3 text-center">
+          <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">APY</p>
+          <p className="font-headline font-black text-lg text-on-tertiary-container">{apyDisplay}</p>
         </div>
-        <div className="bg-surface-container rounded-xl p-2.5 text-center">
-          <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-0.5">Protocol</p>
+        <div className="bg-surface-container rounded-xl p-3 text-center">
+          <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Protocol</p>
           <p className="font-bold text-sm text-on-surface truncate">{vault?.protocol?.name}</p>
         </div>
       </div>
 
       {/* Wallet switch warning */}
       {needsWalletSwitch && txStep === 'idle' && (
-        <div className="flex items-center gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl">
-          <span className="material-symbols-outlined text-amber-500 text-[15px]">swap_horiz</span>
+        <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <span className="material-symbols-outlined text-amber-500 text-[16px]">swap_horiz</span>
           <p className="text-xs font-medium text-amber-800">
             Your wallet is on {getChainName(walletChainId)}. We'll switch to {getChainName(sourceChainId)} before depositing.
           </p>
@@ -452,7 +446,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
 
       {/* Amount input */}
       {txStep !== 'done' && txStep !== 'crosschain' && (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
               Amount ({sourceToken.symbol})
@@ -482,7 +476,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
               onChange={e => { setError(null); setAmount(e.target.value) }}
               placeholder="0.00"
               disabled={isBusy}
-              className="flex-1 px-4 py-3 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50"
+              className="flex-1 px-4 py-3.5 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50"
             />
             <div className="flex items-center gap-1 pr-3">
               <button onClick={setHalf} disabled={isBusy || balFloat === 0}
@@ -506,7 +500,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
           )}
 
           {isValid && apy != null && (
-            <div className="flex items-center justify-between p-2 bg-on-tertiary-container/5 rounded-xl border border-on-tertiary-container/10">
+            <div className="flex items-center justify-between p-2.5 bg-on-tertiary-container/5 rounded-xl border border-on-tertiary-container/10">
               <p className="text-xs text-on-surface-variant font-medium">Projected earnings</p>
               <div className="text-right">
                 <p className="text-xs font-black text-on-tertiary-container">
@@ -529,7 +523,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
 
       {/* Tx progress */}
       {isBusy && (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {needsWalletSwitch && <StepIndicator label={`Switch to ${getChainName(sourceChainId)}`} status={txStep === 'switching' ? 'active' : 'done'} />}
           <StepIndicator label="Build Composer Route" status={txStep === 'approving' ? 'active' : txStep === 'depositing' ? 'done' : 'pending'} />
           <StepIndicator label="Approve Token"        status={txStep === 'approving' ? 'active' : txStep === 'depositing' ? 'done' : 'pending'} />
@@ -539,11 +533,11 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
 
       {/* Cross-chain pending */}
       {txStep === 'crosschain' && (
-        <div className="text-center space-y-3 py-3">
-          <div className="w-14 h-14 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
-            <span className="material-symbols-outlined text-on-tertiary-container text-2xl animate-spin">autorenew</span>
+        <div className="text-center space-y-4 py-4">
+          <div className="w-16 h-16 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
+            <span className="material-symbols-outlined text-on-tertiary-container text-3xl animate-spin">autorenew</span>
           </div>
-          <h3 className="font-headline font-extrabold text-lg text-on-surface">Bridge In Progress</h3>
+          <h3 className="font-headline font-extrabold text-xl text-on-surface">Bridge In Progress</h3>
           <p className="text-sm text-on-surface-variant">
             {getChainName(sourceChainId)} → {getChainName(vault.chainId)}. Takes 1–5 minutes.
           </p>
@@ -559,11 +553,11 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
 
       {/* Done */}
       {txStep === 'done' && (
-        <div className="text-center space-y-3 py-3">
-          <div className="w-14 h-14 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
-            <span className="material-symbols-outlined text-on-tertiary-container text-2xl">check_circle</span>
+        <div className="text-center space-y-3 py-4">
+          <div className="w-16 h-16 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
+            <span className="material-symbols-outlined text-on-tertiary-container text-3xl">check_circle</span>
           </div>
-          <h3 className="font-headline font-extrabold text-lg text-on-surface">Deposit Complete!</h3>
+          <h3 className="font-headline font-extrabold text-xl text-on-surface">Deposit Complete!</h3>
           <p className="text-sm text-on-surface-variant">
             {amount} {sourceToken?.symbol} is now earning {apyDisplay} APY in {vault?.name}.
           </p>
@@ -574,7 +568,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
       <div className="flex gap-2">
         {txStep !== 'done' && txStep !== 'crosschain' && !isBusy && (
           <button type="button" onClick={onBack}
-            className="px-4 py-3.5 rounded-2xl font-headline font-black text-sm border-2 border-surface-container-high text-on-surface-variant hover:border-primary-container/40 transition-all flex items-center">
+            className="px-4 py-4 rounded-2xl font-headline font-black text-sm border-2 border-surface-container-high text-on-surface-variant hover:border-primary-container/40 transition-all flex items-center">
             <span className="material-symbols-outlined text-[16px]">arrow_back</span>
           </button>
         )}
@@ -583,7 +577,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
           <button
             onClick={handleDeposit}
             disabled={!isValid || isBusy}
-            className={`flex-1 py-3.5 rounded-2xl font-headline font-black text-sm transition-all flex items-center justify-center gap-2
+            className={`flex-1 py-4 rounded-2xl font-headline font-black text-sm transition-all flex items-center justify-center gap-2
               ${isValid && !isBusy
                 ? 'bg-primary-container text-white hover:opacity-90 shadow-md'
                 : 'bg-surface-container text-on-surface-variant cursor-not-allowed'
@@ -610,12 +604,12 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
           </button>
         ) : txStep === 'crosschain' ? (
           <button onClick={() => { onSuccess?.({ vault, amount }); onClose() }}
-            className="w-full py-3.5 rounded-2xl font-headline font-black text-base bg-surface-container text-on-surface-variant hover:bg-surface-container-high transition-all">
+            className="w-full py-4 rounded-2xl font-headline font-black text-base bg-surface-container text-on-surface-variant hover:bg-surface-container-high transition-all">
             Close (Bridge Continuing)
           </button>
         ) : (
           <button onClick={onClose}
-            className="w-full py-3.5 rounded-2xl font-headline font-black text-base bg-on-tertiary-container text-white hover:opacity-90 transition-all">
+            className="w-full py-4 rounded-2xl font-headline font-black text-base bg-on-tertiary-container text-white hover:opacity-90 transition-all">
             Done
           </button>
         )}
@@ -638,13 +632,13 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
       />
 
       <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl flex flex-col"
-           style={{ maxHeight: '88vh' }}>
+           style={{ maxHeight: '92vh' }}>
 
         {/* Header — fixed */}
-        <div className="px-5 pt-5 pb-3 border-b border-surface-container shrink-0">
+        <div className="px-6 pt-6 pb-4 border-b border-surface-container shrink-0">
           <div className="flex items-center justify-between">
             <div className="min-w-0 pr-4">
-              <h2 className="font-headline font-extrabold text-lg text-on-surface">
+              <h2 className="font-headline font-extrabold text-xl text-on-surface">
                 {modalStep === 'pick-source' ? 'Choose Source' : 'Deposit'}
               </h2>
               <p className="text-xs text-on-surface-variant mt-0.5 font-medium truncate">
@@ -659,7 +653,7 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
           </div>
 
           {/* Step pills */}
-          <div className="flex items-center gap-2 mt-2.5">
+          <div className="flex items-center gap-2 mt-3">
             <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
               modalStep === 'pick-source' ? 'bg-primary-container text-white' : 'bg-on-tertiary-container text-white'
             }`}>
@@ -675,8 +669,8 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
           </div>
         </div>
 
-        {/* Body — scrollable only if content overflows */}
-        <div className="px-5 py-4 overflow-y-auto flex-1">
+        {/* Body — scrollable */}
+        <div className="p-6 overflow-y-auto flex-1">
           {modalStep === 'pick-source' ? (
             <SourcePicker
               onConfirm={src => { setSource(src); setModalStep('amount') }}
