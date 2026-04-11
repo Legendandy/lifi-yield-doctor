@@ -1,27 +1,18 @@
 // src/components/WithdrawModal.jsx
 //
-// KEY FIXES (per LI.FI Earn docs):
+// HOW WITHDRAWAL WORKS (per LI.FI docs):
 //
-// 1. BALANCE DISPLAY:
-//    - `position.balanceNative` can be EITHER:
-//      a) A raw integer string: "4901960784313725490196" (18-decimal LP tokens like mUSDC)
-//      b) A human-readable decimal string: "0.049852" (some vaults like WBTC return pre-formatted)
-//    - Detect which format: if it contains "." it's already human-readable
-//    - For integer strings: divide by lpDecimals using formatUnits
-//    - For decimal strings: parseFloat directly
-//    - Fall back to reading balanceOf on-chain when balanceNative is 0 or absent
+// GET /v1/earn/portfolio/:userAddress/positions returns:
+//   position.asset.address  = the vault share/LP token address (e.g. mUSDC, NOT USDC)
+//   position.asset.decimals = the LP token decimals
+//   position.balanceNative  = raw LP token balance (integer string OR decimal string)
 //
-// 2. WITHDRAWAL AMOUNT:
-//    - `fromToken` in the Composer quote = vault.address (the LP/share token)
-//    - `fromAmount` = toRaw(humanBalance, lpDecimals) for consistent integer conversion
+// For a withdrawal quote:
+//   fromToken = position.asset.address   ← the vault share token the user holds
+//   toToken   = whatever token they want to receive (USDC, WBTC, ETH, etc.)
 //
-// 3. QUOTE 400 ERROR:
-//    - Caused by fromAmount = "0". Guard before fetching quote.
-//    - Also triggered when destToken not yet selected.
-//
-// 4. TOKEN SYMBOL:
-//    - Show lpTokens[0].symbol (e.g. "mUSDC") as what's being redeemed
-//    - Fall back: underlyingTokens[0].symbol → asset.symbol from position → "shares"
+// That's it. No fallback chain. No guessing. The portfolio API tells us exactly
+// what token is in the user's wallet — position.asset.address.
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
@@ -56,7 +47,6 @@ function getLifiHeaders() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function toRaw(human, decimals) {
   if (!human || isNaN(parseFloat(human))) return '0'
-  // Clamp decimals to avoid BigInt overflow on very long fractions
   const d = Math.min(decimals, 18)
   const str = String(human).trim()
   const [whole, frac = ''] = str.split('.')
@@ -79,35 +69,24 @@ function fmtBalance(f, symbol) {
 }
 
 // ─── Parse balanceNative robustly ─────────────────────────────────────────────
-// The LI.FI portfolio API returns balanceNative in two possible formats:
-//   a) Integer string:  "4901960784313725490196"  → divide by lpDecimals
-//   b) Decimal string:  "0.049852"                → already human-readable
-//
-// Detection: if the string contains "." it's format (b).
-// We return { humanBalance, rawBalance } where:
-//   humanBalance = float for display
-//   rawBalance   = integer string for Composer fromAmount
+// balanceNative can be:
+//   a) Integer string: "4901960784313725490196" → divide by lpDecimals
+//   b) Decimal string: "0.049852"               → already human-readable
 function parseBalanceNative(balanceNative, lpDecimals) {
   if (!balanceNative || balanceNative === '0') {
     return { humanBalance: 0, rawBalance: '0' }
   }
-
   const str = String(balanceNative).trim()
-
-  // Format (b): decimal string like "0.049852"
   if (str.includes('.')) {
     const humanBalance = parseFloat(str) || 0
-    // Convert back to raw integer for Composer quotes
     const rawBalance = toRaw(str, lpDecimals)
     return { humanBalance, rawBalance }
   }
-
-  // Format (a): raw integer string like "4901960784313725490196"
   try {
     const humanBalance = parseFloat(formatUnits(BigInt(str), lpDecimals)) || 0
     return { humanBalance, rawBalance: str }
   } catch (e) {
-    console.warn('[parseBalanceNative] Failed to parse integer string:', str, e.message)
+    console.warn('[parseBalanceNative] Failed to parse:', str, e.message)
     return { humanBalance: 0, rawBalance: '0' }
   }
 }
@@ -129,7 +108,7 @@ function StepRow({ label, status }) {
   )
 }
 
-// ─── Destination token picker (LI.FI SDK getTokens + getTokenBalances) ───────
+// ─── Destination token picker ─────────────────────────────────────────────────
 function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
   const [tokens, setTokens]   = useState([])
   const [loading, setLoading] = useState(false)
@@ -142,7 +121,6 @@ function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
     let cancelled = false
     setLoading(true)
     setTokens([])
-    onChange(null)
 
     ;(async () => {
       try {
@@ -155,7 +133,6 @@ function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
           ...list.filter(t => !PRIORITY.has(t.symbol)),
         ].slice(0, 100)
 
-        // Fetch balances from LI.FI SDK
         let withBal = list
         try {
           const balances = await getTokenBalances(walletAddress, list)
@@ -167,12 +144,18 @@ function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
             try { float = parseFloat(formatUnits(BigInt(raw), t.decimals)) || 0 } catch {}
             return { ...t, balanceFloat: float, formattedBalance: fmtBalance(float, t.symbol) }
           }).sort((a, b) => b.balanceFloat - a.balanceFloat)
-        } catch { /* balances optional — continue without */ }
+        } catch { /* balances optional */ }
 
         if (!cancelled) {
           setTokens(withBal)
-          const best = withBal.find(t => t.balanceFloat > 0) ?? withBal[0]
-          onChange(best ?? null)
+
+          if (value) {
+            const match = withBal.find(t => t.address?.toLowerCase() === value.address?.toLowerCase())
+            if (match) onChange({ ...value, ...match })
+          } else {
+            const best = withBal.find(t => t.balanceFloat > 0) ?? withBal[0]
+            onChange(best ?? null)
+          }
         }
       } catch (err) {
         console.warn('[DestTokenPicker]', err.message)
@@ -182,7 +165,7 @@ function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
     })()
 
     return () => { cancelled = true }
-  }, [chainId, walletAddress])
+  }, [chainId, walletAddress]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -198,13 +181,11 @@ function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
 
   return (
     <div className="relative" ref={ref}>
-      <button type="button" onClick={() => !loading && setOpen(o => !o)} disabled={loading}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 border-surface-container-high bg-surface-container-low hover:border-primary-container/40 transition-all disabled:opacity-60"
+      <button type="button" onClick={() => !loading && setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 border-surface-container-high bg-surface-container-low hover:border-primary-container/40 transition-all"
       >
         <div className="flex items-center gap-2 min-w-0">
-          {loading ? (
-            <p className="text-sm font-bold text-on-surface-variant">Loading tokens...</p>
-          ) : value ? (
+          {value ? (
             <>
               {value.logoURI && (
                 <img src={value.logoURI} alt={value.symbol} className="w-6 h-6 rounded-full shrink-0"
@@ -216,7 +197,7 @@ function DestTokenPicker({ chainId, walletAddress, value, onChange }) {
               </div>
             </>
           ) : (
-            <p className="text-sm font-bold text-on-surface-variant">Select token</p>
+            <p className="text-sm font-bold text-on-surface-variant">{loading ? 'Loading tokens...' : 'Select token'}</p>
           )}
         </div>
         {loading
@@ -313,7 +294,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
   // ── Vault metadata ──────────────────────────────────────────────────────────
   const vaultChainId    = vault?.chainId ?? position?.chainId
-  const vaultAddress    = vault?.address ?? ''
   const vaultName       = vault?.name ?? 'Vault'
   const protocolName    = vault?.protocol?.name ?? 'Unknown'
   const withdrawEnabled = vault?.isRedeemable !== false
@@ -321,39 +301,34 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const apy              = vault?.analytics?.apy?.total
   const apyDisplay       = apy != null ? `${(apy * 100).toFixed(2)}%` : 'N/A'
 
-  // ── LP token resolution ─────────────────────────────────────────────────────
-  // Per LI.FI docs: vault.lpTokens[0] is the share/LP token.
-  // balanceNative uses lpTokens[0].decimals (often 18), NOT underlying decimals.
+  // ── THE fromToken for withdrawal ────────────────────────────────────────────
   //
-  // Resolution priority:
-  //   1. vault.lpTokens[0]  (from _vaultData enrichment in earnApi.js)
-  //   2. position.lpTokens[0] (also passed through from earnApi.js enrichment)
-  //   3. position.asset     (portfolio endpoint: asset = the LP token itself)
-  //   4. underlyingTokens[0] (last resort display only)
-  const lpToken = vault?.lpTokens?.[0]
-    ?? position?.lpTokens?.[0]
-    ?? null
+  // Per LI.FI docs, GET /v1/earn/portfolio/:userAddress/positions returns:
+  //   position.asset.address = the vault share token address (what the user holds)
+  //   e.g. for Morpho USDC vault: "0x7BfA7C4f149E7415b73bdeDfe609237e29CBF34A" (mUSDC)
+  //        NOT "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" (USDC)
+  //
+  // This is ALWAYS the correct fromToken. No fallback chain needed.
+  // vault.address may differ from position.asset.address for some protocols.
+  // position.asset.address is the authoritative source from the portfolio API.
+  const fromTokenAddress = position?.asset?.address ?? vault?.address ?? ''
+  const lpDecimals       = position?.asset?.decimals ?? vault?.lpTokens?.[0]?.decimals ?? 18
+  const lpSymbol         = position?.asset?.symbol   ?? vault?.lpTokens?.[0]?.symbol   ?? 'shares'
 
-  // LP decimals: must use LP token decimals, not underlying token decimals.
-  // USDC has 6 decimals but mUSDC (the LP share) typically has 18.
-  // WBTC vaults: the API returns balanceNative as a decimal string "0.049852"
-  // in that case lpDecimals is used for toRaw() conversion only.
-  const lpDecimals = lpToken?.decimals
-    ?? position?.asset?.decimals       // portfolio endpoint: asset = LP token
-    ?? vault?.underlyingTokens?.[0]?.decimals
-    ?? 18
+  // Debug log
+  useEffect(() => {
+    console.log('[WithdrawModal] fromToken resolved:', {
+      'position.asset.address':  position?.asset?.address,
+      'position.asset.symbol':   position?.asset?.symbol,
+      'position.asset.decimals': position?.asset?.decimals,
+      fromTokenAddress,
+      lpDecimals,
+      lpSymbol,
+      vaultName,
+    })
+  }, [fromTokenAddress]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // LP symbol for UI display
-  const lpSymbol = lpToken?.symbol
-    ?? position?.asset?.symbol
-    ?? vault?.underlyingTokens?.[0]?.symbol
-    ?? 'shares'
-
-  // ── Parse balanceNative ──────────────────────────────────────────────────────
-  // IMPORTANT: balanceNative can be EITHER format depending on the vault:
-  //   Integer: "4901960784313725490196" — mUSDC style (18 dec LP token)
-  //   Decimal: "0.049852"              — WBTC style (API pre-formats some vaults)
-  // parseBalanceNative() handles both transparently.
+  // ── Parse balance ───────────────────────────────────────────────────────────
   const balanceNativeRaw = position?.balanceNative ?? null
   const balanceUsd       = Number(position?.balanceUsd ?? vault?._positionBalanceUsd ?? 0)
 
@@ -363,22 +338,21 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const hasApiBalance = apiBalanceHuman > 0
 
   // ── On-chain balance fallback ────────────────────────────────────────────────
-  // When balanceNative is 0 or missing, read balanceOf(vault) directly from chain.
   const [onChainRaw, setOnChainRaw]   = useState(null)
   const [fetchingBal, setFetchingBal] = useState(false)
 
   useEffect(() => {
-    if (hasApiBalance || !vaultAddress || !address) return
+    if (hasApiBalance || !fromTokenAddress || !address) return
     let cancelled = false
     setFetchingBal(true)
     ;(async () => {
       try {
         if (!window.ethereum) return
         const provider = new ethers.BrowserProvider(window.ethereum)
-        const contract = new ethers.Contract(vaultAddress, ERC20_ABI, provider)
+        const contract = new ethers.Contract(fromTokenAddress, ERC20_ABI, provider)
         const bal      = await contract.balanceOf(address)
         if (!cancelled) {
-          console.log('[WithdrawModal] On-chain balance:', bal.toString(), 'lpDecimals:', lpDecimals)
+          console.log('[WithdrawModal] On-chain balance:', bal.toString())
           setOnChainRaw(bal.toString())
         }
       } catch (e) {
@@ -388,9 +362,8 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
       }
     })()
     return () => { cancelled = true }
-  }, [hasApiBalance, vaultAddress, address])
+  }, [hasApiBalance, fromTokenAddress, address, lpDecimals])
 
-  // Best values: API first, then on-chain read
   const bestRawBalance = (() => {
     if (hasApiBalance) return apiRawBalance
     if (onChainRaw && onChainRaw !== '0') return onChainRaw
@@ -404,22 +377,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   })()
 
   const hasBalance = bestBalanceHuman > 0
-
-  // Debug log
-  useEffect(() => {
-    console.log('[WithdrawModal] Balance state:', {
-      vaultName,
-      vaultAddress,
-      balanceNativeRaw,
-      lpDecimals,
-      lpSymbol,
-      apiBalanceHuman,
-      apiRawBalance,
-      hasApiBalance,
-      bestRawBalance,
-      bestBalanceHuman,
-    })
-  }, [balanceNativeRaw, lpDecimals, bestRawBalance])
 
   // ── Form state ──────────────────────────────────────────────────────────────
   const [withdrawType, setWithdrawType] = useState('partial')
@@ -448,9 +405,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const needsSwitch  = walletChainId !== vaultChainId
   const isBusy       = ['switching', 'approving', 'withdrawing'].includes(txStep)
 
-  // Raw integer amount for Composer fromAmount
-  // For withdrawals: fromToken = vault address (LP share token)
-  // fromAmount must always be a raw integer string, never a decimal
   const rawAmount = withdrawType === 'full'
     ? bestRawBalance
     : toRaw(amount, lpDecimals)
@@ -464,32 +418,42 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
   // ── Fetch preview quote ──────────────────────────────────────────────────────
   const fetchQuote = useCallback(async () => {
-    if (!isValid || !destToken || !vaultAddress || !rawAmount || rawAmount === '0') {
+    if (!isValid || !destToken || !fromTokenAddress || !rawAmount || rawAmount === '0') {
       setQuote(null); setQuoteError(null); return
     }
+
     setQuoteLoading(true); setQuoteError(null); setQuote(null)
     try {
       const params = new URLSearchParams({
         fromChain:   String(vaultChainId),
         toChain:     String(destChainId),
-        fromToken:   vaultAddress,
-        toToken:     destToken.address,
+        fromToken:   fromTokenAddress,   // vault share token (position.asset.address)
+        toToken:     destToken.address,  // token user wants to receive
         fromAddress: address,
         toAddress:   address,
         fromAmount:  rawAmount,
         slippage:    '0.005',
         integrator:  'yield-doctor',
       })
+
+      console.log('[WithdrawModal] Quote params:', {
+        fromToken: `${lpSymbol} @ ${fromTokenAddress}`,
+        toToken:   `${destToken.symbol} @ ${destToken.address}`,
+        rawAmount,
+      })
+
       const res = await fetch(`${getLifiBase()}/v1/quote?${params}`, { headers: getLifiHeaders() })
       if (!res.ok) {
         const txt = await res.text().catch(() => '')
+        let errMsg = `Quote unavailable (${res.status}). Please try again.`
+        try {
+          const parsed = JSON.parse(txt)
+          if (parsed.message) errMsg = parsed.message
+        } catch { /* use default */ }
         if (res.status === 404 || txt.toLowerCase().includes('no routes')) {
-          setQuoteError('No route found. Try a different destination token or same-chain withdrawal.')
-        } else if (res.status === 400) {
-          setQuoteError('Invalid withdrawal parameters. The vault may not support this route.')
-        } else {
-          setQuoteError(`Quote unavailable (${res.status}). Please try again.`)
+          errMsg = 'No route found. Try a different destination token or same-chain withdrawal.'
         }
+        setQuoteError(errMsg)
         return
       }
       const q = await res.json()
@@ -500,7 +464,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     } finally {
       setQuoteLoading(false)
     }
-  }, [isValid, destToken, vaultAddress, rawAmount, vaultChainId, destChainId, address])
+  }, [isValid, destToken, fromTokenAddress, rawAmount, vaultChainId, destChainId, address, lpSymbol])
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
@@ -559,7 +523,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
       let withdrawRaw = rawAmount
       if (withdrawType === 'full') {
         try {
-          const contract = new ethers.Contract(vaultAddress, ERC20_ABI, provider)
+          const contract = new ethers.Contract(fromTokenAddress, ERC20_ABI, provider)
           const onChain  = await contract.balanceOf(address)
           withdrawRaw    = onChain.toString()
           if (withdrawRaw === '0') throw new Error('No vault shares found in your wallet on this chain.')
@@ -575,12 +539,12 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
       if (!withdrawRaw || withdrawRaw === '0') throw new Error('Withdrawal amount is zero.')
 
-      // Get a fresh quote at execution time
+      // Fresh quote at execution time
       toast.update(toastId, { type: 'loading', title: 'Getting Route', message: 'Fetching fresh Composer quote...' })
       const params = new URLSearchParams({
         fromChain:   String(vaultChainId),
         toChain:     String(destChainId),
-        fromToken:   vaultAddress,
+        fromToken:   fromTokenAddress,   // vault share token (position.asset.address)
         toToken:     destToken.address,
         fromAddress: address,
         toAddress:   address,
@@ -596,9 +560,9 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
       const freshQuote = await res.json()
       if (!freshQuote.transactionRequest) throw new Error('No transaction data from Composer.')
 
-      // Approve vault shares if needed
+      // Approve vault share token if needed
       if (freshQuote.estimate?.approvalAddress) {
-        const erc20   = new ethers.Contract(vaultAddress, ERC20_ABI, signer)
+        const erc20   = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer)
         const owner   = await signer.getAddress()
         const spender = freshQuote.estimate.approvalAddress
         let cur = 0n
@@ -610,7 +574,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
         }
       }
 
-      // Send the withdrawal transaction
+      // Send transaction
       toast.update(toastId, { type: 'loading', title: 'Confirm in Wallet', message: 'Sign the withdrawal...' })
       setTxStep('withdrawing')
       const tx = await signer.sendTransaction(freshQuote.transactionRequest)
@@ -779,7 +743,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
               <div className="flex items-start gap-2 pt-2 border-t border-surface-container-high">
                 <span className="material-symbols-outlined text-amber-500 text-[14px] mt-0.5">warning</span>
                 <p className="text-[11px] text-amber-700 font-medium">
-                  No balance detected. If you have a position here, make sure your wallet is connected to {getChainName(vaultChainId)}.
+                  No balance detected. Make sure your wallet is connected to {getChainName(vaultChainId)}.
                 </p>
               </div>
             )}
@@ -865,7 +829,12 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                 <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Receive on</p>
                 <ChainPicker
                   value={destChainId}
-                  onChange={(id) => { setDestChainId(id); setDestToken(null); setQuote(null); setError(null) }}
+                  onChange={(id) => {
+                    setDestChainId(id)
+                    setDestToken(null)
+                    setQuote(null)
+                    setError(null)
+                  }}
                   label="Destination chain"
                 />
                 {isCrossChain && (
