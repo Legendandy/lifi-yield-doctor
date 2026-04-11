@@ -2,15 +2,15 @@
 //
 // WITHDRAWAL: fromToken = vault LP/share token, toToken = what user wants to receive
 //
-// How to get the LP token address:
-//   The ONLY reliable source is vault.lpTokens[0].address from GET /v1/earn/vaults/:chainId/:address
-//   vault.address is NOT always the LP token — for some protocols it IS the underlying token address
-//   position.asset.address is sometimes the LP token (Morpho mUSDC) and sometimes the underlying (Aave USDC)
+// For ERC-4626 vaults (Morpho, Euler, Yearn, etc.), the vault contract address IS
+// the share token. When you deposit, the vault mints share tokens to you from its
+// own contract address. So vault.address === LP share token address.
 //
 // Resolution order:
-//   1. vault.lpTokens[0].address  — always the LP share token per vault API schema
-//   2. position.asset.address     — only if its address/symbol does NOT match any underlyingToken
-//   3. throw — never silently fall through to vault.address
+//   1. vault.lpTokens[0].address  — explicit LP share token from vault API
+//   2. vault.address              — for ERC-4626 vaults, this IS the share token
+//   3. position.asset.address     — only if it's NOT an underlying token
+//   4. throw
 
 import { ethers } from 'ethers'
 
@@ -33,23 +33,31 @@ function getLifiHeaders() {
 }
 
 /**
- * Resolve the vault LP/share token address to use as fromToken.
+ * Resolve the vault LP/share token address to use as fromToken for withdrawal.
+ *
+ * For ERC-4626 vaults, depositing mints share tokens from the vault contract itself.
+ * So vault.address IS the share token you received. This is the standard for
+ * Morpho, Euler, Yearn, Beefy, and most modern DeFi vaults.
  *
  * Priority:
- *   1. vault.lpTokens[0].address — explicit LP token from vault API (always correct)
- *   2. position.asset.address    — only if NOT an underlying token address/symbol
- *
- * vault.address is deliberately excluded — for many protocols it equals the underlying
- * token address (e.g. WBTC), not the LP share token.
+ *   1. vault.lpTokens[0].address  — explicit from vault API (most accurate)
+ *   2. vault.address              — ERC-4626 share token (the vault IS the token)
+ *   3. position.asset.address     — only if NOT an underlying token
  */
 export function resolveWithdrawFromToken(vault, position) {
   // 1. Best source: vault.lpTokens from the vault API
   if (vault?.lpTokens?.length > 0 && vault.lpTokens[0]?.address) {
-    console.log('[resolveWithdrawFromToken] vault.lpTokens[0].address:', vault.lpTokens[0].address)
     return vault.lpTokens[0].address
   }
 
-  // 2. position.asset.address — safe only if it's NOT an underlying token
+  // 2. vault.address — for ERC-4626 vaults, this IS the share token contract.
+  //    When you deposit into a vault, it mints share tokens TO YOU from this address.
+  //    This is the correct fromToken for withdrawals on Morpho, Euler, Yearn, etc.
+  if (vault?.address) {
+    return vault.address
+  }
+
+  // 3. position.asset.address — only if it's NOT an underlying token
   if (position?.asset?.address) {
     const assetAddr   = position.asset.address.toLowerCase()
     const assetSymbol = (position.asset.symbol ?? '').toUpperCase()
@@ -60,26 +68,13 @@ export function resolveWithdrawFromToken(vault, position) {
     const isUnderlying = underlyingAddrs.includes(assetAddr) || underlyingSymbols.includes(assetSymbol)
 
     if (!isUnderlying) {
-      console.log('[resolveWithdrawFromToken] position.asset.address (not underlying):', position.asset.address)
       return position.asset.address
     }
-
-    console.warn('[resolveWithdrawFromToken] position.asset is an underlying token, skipping.', {
-      assetSymbol, assetAddr, underlyingSymbols, underlyingAddrs,
-    })
   }
 
-  console.error('[resolveWithdrawFromToken] FAILED. vault data:', {
-    'vault.address':          vault?.address,
-    'vault.lpTokens':         vault?.lpTokens,
-    'vault.underlyingTokens': vault?.underlyingTokens?.map(t => `${t.symbol}@${t.address}`),
-    'position.asset':         position?.asset,
-  })
-
   throw new Error(
-    `Cannot find LP token for "${vault?.name ?? 'vault'}". ` +
-    `vault.lpTokens is empty and position.asset is an underlying token. ` +
-    `The vault object must include lpTokens from GET /v1/earn/vaults/:chainId/:address.`
+    `Cannot find the vault share token for "${vault?.name ?? 'this vault'}". ` +
+    `vault.address is missing, vault.lpTokens is empty, and position.asset is an underlying token.`
   )
 }
 
@@ -91,13 +86,14 @@ export function resolveWithdrawFromDecimals(vault, position) {
 
 export function resolveWithdrawFromSymbol(vault, position) {
   if (vault?.lpTokens?.[0]?.symbol) return vault.lpTokens[0].symbol
+  if (vault?.name) return vault.name
   if (position?.asset?.symbol) return position.asset.symbol
   return 'shares'
 }
 
 /**
  * Fetch a Composer withdrawal quote.
- * fromToken = LP share token (resolveWithdrawFromToken result)
+ * fromToken = vault share token (resolveWithdrawFromToken result)
  * toToken   = destination token the user wants
  */
 export async function getWithdrawQuote({
@@ -118,8 +114,7 @@ export async function getWithdrawQuote({
     fromTokenAddress.toLowerCase() === toTokenAddress.toLowerCase()
   ) {
     throw new Error(
-      `fromToken and toToken are the same address (${fromTokenAddress.slice(0, 10)}...). ` +
-      `vault.lpTokens is likely missing — check the console for resolveWithdrawFromToken output.`
+      'The source and destination tokens are the same. Please select a different token to receive.'
     )
   }
 
@@ -133,11 +128,6 @@ export async function getWithdrawQuote({
     fromAmount:  String(fromAmount),
     slippage:    String(slippage),
     integrator:  'yield-doctor',
-  })
-
-  console.log('[getWithdrawQuote]', {
-    fromChain: vaultChainId, toChain: destChainId,
-    fromToken: fromTokenAddress, toToken: toTokenAddress, fromAmount,
   })
 
   const res = await fetch(`${getLifiBase()}/v1/quote?${params}`, { headers: getLifiHeaders() })
@@ -190,9 +180,8 @@ export async function executeWithdraw({
       const contract   = new ethers.Contract(fromTokenAddress, ERC20_ABI, provider)
       const onChainBal = await contract.balanceOf(userAddress)
       withdrawRaw      = onChainBal.toString()
-      console.log('[executeWithdraw] On-chain LP balance:', withdrawRaw)
-    } catch (e) {
-      console.warn('[executeWithdraw] Could not read on-chain balance, using rawAmount:', e.message)
+    } catch {
+      // fall back to rawAmount passed in
     }
   }
 
@@ -225,7 +214,6 @@ export async function executeWithdraw({
   onTxSent?.(tx.hash)
 
   const receipt = await tx.wait()
-  console.log('[executeWithdraw] Confirmed:', receipt.blockNumber)
 
   return { txHash: tx.hash, receipt, isCrossChain, quote }
 }
