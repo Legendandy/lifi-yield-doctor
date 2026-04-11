@@ -2,14 +2,21 @@
 //
 // KEY INSIGHT from docs:
 // The portfolio endpoint returns positions with:
-//   - balanceNative: raw LP token amount (integer string) - use for withdrawals
+//   - balanceNative: raw LP token amount (integer string) — use this for withdrawals
 //   - balanceUsd: USD value
 //   - asset.address: the VAULT LP token address (e.g. mUSDC address)
+//   - asset.decimals: the LP token decimals (often 18, NOT underlying decimals!)
 //   - NO apy, apy30d fields
 //
 // APY fix: we call GET /v1/earn/vaults/:chainId/:vaultAddress for each position.
-// The vault endpoint DOES return analytics.apy.total, apy30d, etc.
-// We also store isTransactional and isRedeemable from the vault response.
+// The vault endpoint DOES return analytics.apy.total, apy30d, lpTokens, etc.
+//
+// CRITICAL: balanceNative uses LP token decimals (lpTokens[0].decimals), which is
+// often 18 (e.g. mUSDC), NOT the underlying token decimals (e.g. USDC = 6 decimals).
+// Using the wrong decimals causes an off-by-10^12 error in balance display.
+//
+// We pass through lpTokens from the vault response so WithdrawModal can find the
+// correct LP decimals and symbol without any guesswork.
 
 import { getCached, setCached, CACHE_KEYS } from './vaultCache'
 
@@ -85,7 +92,6 @@ export async function getVaultByAddress(chainId, address) {
       setCached(cacheKey, data)
       return data
     }
-    // Response came back but has no analytics — log and return null
     console.warn(`[getVaultByAddress] No analytics in response for chain ${chainId} addr ${address.slice(0,10)}`)
     return null
   } catch (err) {
@@ -96,8 +102,13 @@ export async function getVaultByAddress(chainId, address) {
 
 // ─── Portfolio positions with APY enrichment ──────────────────────────────────
 // The Earn API portfolio response does NOT include APY.
-// We fetch each vault individually to get analytics.apy.total, apy30d, etc.
-// Also picks up isTransactional + isRedeemable from the vault response.
+// We fetch each vault individually to get analytics.apy.total, apy30d, lpTokens, etc.
+//
+// IMPORTANT for balance display:
+// - position.asset.address = vault LP token address
+// - position.asset.decimals = LP token decimals (often 18, even for USDC-based vaults)
+// - position.balanceNative = raw LP integer string, divide by LP decimals to get human value
+// - We also pass vaultData.lpTokens through so WithdrawModal can find the correct decimals
 export async function getPortfolioPositions(userAddress) {
   if (!userAddress) return []
 
@@ -114,10 +125,9 @@ export async function getPortfolioPositions(userAddress) {
 
   console.log(`[getPortfolioPositions] ${rawPositions.length} positions, enriching with vault data...`)
 
-  // Enrich each position with full vault data (APY, 30d APY, TVL, underlying tokens)
   const enriched = await Promise.allSettled(
     rawPositions.map(async (pos) => {
-      // asset.address is the vault LP token address = the vault address
+      // asset.address is the vault LP token address
       const vaultAddress = pos.asset?.address
       if (!vaultAddress || !pos.chainId) {
         console.warn(`[getPortfolioPositions] Skipping position without address/chainId:`, pos.asset?.symbol)
@@ -128,6 +138,8 @@ export async function getPortfolioPositions(userAddress) {
 
       if (!vaultData) {
         console.warn(`[getPortfolioPositions] Could not enrich ${pos.asset?.symbol} on chain ${pos.chainId} — APY will show N/A`)
+        // Even without vault data, preserve what the portfolio API told us.
+        // pos.asset.decimals IS the LP token decimals — use it for balance display.
         return {
           ...pos,
           apy: null,
@@ -138,14 +150,20 @@ export async function getPortfolioPositions(userAddress) {
           vaultName: pos.asset?.name ?? 'Unknown Vault',
           protocolName: pos.protocolName ?? 'Unknown',
           underlyingTokens: [],
+          // Preserve LP token info from portfolio response for decimal math
+          lpTokens: pos.asset ? [{
+            address: pos.asset.address,
+            symbol: pos.asset.symbol,
+            decimals: pos.asset.decimals ?? 18,
+          }] : [],
         }
       }
 
       const enrichedPos = {
         ...pos,
-        // Full vault object for modals
+        // Full vault object for modals — includes lpTokens with correct decimals
         _vaultData: vaultData,
-        // APY fields — THIS is the fix for N/A
+        // APY fields
         apy: vaultData.analytics?.apy?.total ?? null,
         apy30d: vaultData.analytics?.apy30d ?? null,
         apy7d: vaultData.analytics?.apy7d ?? null,
@@ -158,12 +176,27 @@ export async function getPortfolioPositions(userAddress) {
         vaultAddress,
         vaultName: vaultData.name ?? pos.asset?.name ?? 'Unknown Vault',
         protocolName: vaultData.protocol?.name ?? pos.protocolName ?? 'Unknown',
-        // Underlying tokens (needed for withdraw modal)
+        // Underlying tokens (needed for withdraw modal UI display)
         underlyingTokens: vaultData.underlyingTokens ?? [],
+        // LP tokens — CRITICAL for balance display in WithdrawModal.
+        // lpTokens[0].decimals is what balanceNative uses (often 18).
+        // Fall back to portfolio's asset info if vault API didn't return lpTokens.
+        lpTokens: vaultData.lpTokens?.length > 0
+          ? vaultData.lpTokens
+          : pos.asset
+            ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }]
+            : [],
         // balanceNative is already on pos — raw LP token balance string
+        // The decimals to use for it are lpTokens[0].decimals (above)
       }
 
-      console.log(`[getPortfolioPositions] Enriched ${enrichedPos.vaultName}: APY=${enrichedPos.apy != null ? (enrichedPos.apy * 100).toFixed(2) + '%' : 'N/A'}`)
+      console.log(
+        `[getPortfolioPositions] Enriched ${enrichedPos.vaultName}:`,
+        `APY=${enrichedPos.apy != null ? (enrichedPos.apy * 100).toFixed(2) + '%' : 'N/A'}`,
+        `lpDecimals=${enrichedPos.lpTokens[0]?.decimals ?? 'unknown'}`,
+        `lpSymbol=${enrichedPos.lpTokens[0]?.symbol ?? 'unknown'}`,
+        `balanceNative=${pos.balanceNative}`,
+      )
       return enrichedPos
     })
   )

@@ -23,6 +23,15 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/lifi-api/, ''),
         secure: true,
       },
+      // Proxy Merkle RPC to fix CORS errors from LI.FI SDK balance fetching.
+      // The SDK picks eth.merkle.io as the Ethereum RPC, which blocks browser
+      // cross-origin requests. Routing through Vite's proxy avoids the CORS check.
+      '/merkle-rpc': {
+        target: 'https://eth.merkle.io',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/merkle-rpc/, ''),
+        secure: true,
+      },
     },
   },
 })

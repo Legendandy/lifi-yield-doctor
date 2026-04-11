@@ -55,11 +55,29 @@ const monad = {
   rpcUrls: { default: { http: ['https://monad-mainnet.drpc.org'] } },
 }
 
+// Override mainnet RPC to avoid eth.merkle.io CORS errors.
+// eth.merkle.io blocks browser cross-origin requests, causing the LI.FI SDK's
+// getTokenBalances to fail with CORS errors when reading Ethereum balances.
+// Cloudflare's eth.cloudflare-eth.com is a public RPC that allows browser requests.
+const mainnetWithPublicRpc = {
+  ...mainnet,
+  rpcUrls: {
+    ...mainnet.rpcUrls,
+    default: {
+      http: [
+        'https://eth.llamarpc.com',          // LlamaRPC — no CORS restrictions
+        'https://ethereum.publicnode.com',    // PublicNode — CORS friendly
+        'https://1rpc.io/eth',               // 1RPC — CORS friendly
+      ],
+    },
+  },
+}
+
 export const wagmiConfig = getDefaultConfig({
   appName: 'Yield Doctor',
   projectId: 'YOUR_WALLETCONNECT_PROJECT_ID',
   chains: [
-    mainnet,
+    mainnetWithPublicRpc,   // Use CORS-friendly RPCs for Ethereum
     optimism,
     bsc,
     gnosis,
@@ -80,8 +98,9 @@ export const wagmiConfig = getDefaultConfig({
 })
 
 // ─── Configure LI.FI SDK with the wagmi EVM provider ─────────────────────────
-// This is required for getTokenBalances to work correctly.
 // The EVM provider hooks into wagmi so balance reads use the connected wallet's RPC.
+// By overriding mainnet's RPC above, the SDK will use LlamaRPC/PublicNode instead
+// of eth.merkle.io, eliminating the CORS errors.
 createLiFiConfig({
   integrator: 'yield-doctor',
   providers: [
