@@ -8,6 +8,13 @@ import WithdrawModal from '../components/WithdrawModal'
 import { getPortfolioPositions, getVaults, getBestVaultAcrossAllChains } from '../services/earnApi'
 import { getDiagnosis } from '../services/aiDiagnosis'
 import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
+import { SUPPORTED_CHAINS } from '../services/tokenBalances'
+
+const CHAIN_NAMES = Object.fromEntries(SUPPORTED_CHAINS.map(c => [c.id, c.name]))
+function getChainName(chainId) {
+  if (!chainId) return 'Unknown'
+  return CHAIN_NAMES[chainId] ?? `Chain ${chainId}`
+}
 
 function getHealthTag(currentApy, bestAvailableApy) {
   if (currentApy == null || bestAvailableApy == null) return { label: 'Unknown', color: '#76777d' }
@@ -35,8 +42,6 @@ export default function DashboardPage() {
   const [error, setError] = useState(null)
   const [hasPositions, setHasPositions] = useState(false)
   const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
-
-  // Modal state
   const [depositModal, setDepositModal] = useState(null)
   const [withdrawModal, setWithdrawModal] = useState(null)
 
@@ -58,7 +63,7 @@ export default function DashboardPage() {
     setError(null)
     try {
       const [userPositions, topVaults, bestVault] = await Promise.all([
-        getPortfolioPositions(address),
+        getPortfolioPositions(address),  // now enriched with apy, apy30d, balanceNative
         getVaults({ sortBy: 'apy', minTvlUsd: 500_000, limit: 10 }),
         getBestVaultAcrossAllChains(),
       ])
@@ -82,7 +87,7 @@ export default function DashboardPage() {
     } catch (err) {
       console.error('Dashboard load error:', err)
       setError(err.message)
-      setDiagnosis('Unable to load diagnosis. Check your API key and network.')
+      setDiagnosis('Unable to load diagnosis.')
     } finally {
       setLoading(false)
     }
@@ -124,7 +129,6 @@ export default function DashboardPage() {
         <LoadingSkeleton />
       ) : (
         <div className="grid grid-cols-12 gap-8">
-          {/* LEFT: Active Vaults */}
           <section className="col-span-12 lg:col-span-7 space-y-4">
             {!hasPositions ? (
               <NoPositionsState onGoToVaults={() => navigate('/vaults')} />
@@ -133,7 +137,7 @@ export default function DashboardPage() {
                 <PositionCard
                   key={i}
                   position={pos}
-                  allVaults={vaults}
+                  bestApy={vaults[0]?.analytics?.apy?.total ?? 0}
                   onDeposit={(vault) => setDepositModal(vault)}
                   onWithdraw={(vault, position) => setWithdrawModal({ vault, position })}
                 />
@@ -141,7 +145,6 @@ export default function DashboardPage() {
             )}
           </section>
 
-          {/* RIGHT: Yield Health Report */}
           <section className="col-span-12 lg:col-span-5 space-y-6">
             <DiagnosisSummary diagnosis={diagnosis} loading={loading} />
             {bestCrossChain && (
@@ -160,29 +163,20 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Deposit Modal */}
       {depositModal && (
         <DepositModal
           vault={depositModal}
           onClose={() => setDepositModal(null)}
-          onSuccess={() => {
-            setDepositModal(null)
-            // Refresh data after deposit
-            setTimeout(() => loadData(), 2000)
-          }}
+          onSuccess={() => { setDepositModal(null); setTimeout(() => loadData(), 2000) }}
         />
       )}
 
-      {/* Withdraw Modal */}
       {withdrawModal && (
         <WithdrawModal
           vault={withdrawModal.vault}
           position={withdrawModal.position}
           onClose={() => setWithdrawModal(null)}
-          onSuccess={() => {
-            setWithdrawModal(null)
-            setTimeout(() => loadData(), 2000)
-          }}
+          onSuccess={() => { setWithdrawModal(null); setTimeout(() => loadData(), 2000) }}
         />
       )}
     </AppShell>
@@ -193,9 +187,7 @@ function LoadingSkeleton() {
   return (
     <div className="grid grid-cols-12 gap-8 animate-pulse">
       <div className="col-span-7 space-y-4">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="h-40 bg-surface-container rounded-xl" />
-        ))}
+        {[1, 2, 3].map(i => <div key={i} className="h-40 bg-surface-container rounded-xl" />)}
       </div>
       <div className="col-span-5 space-y-4">
         <div className="h-48 bg-surface-container rounded-xl" />
@@ -226,30 +218,39 @@ function NoPositionsState({ onGoToVaults }) {
   )
 }
 
-function PositionCard({ position, allVaults, onDeposit, onWithdraw }) {
-  const matchingVault = allVaults.find((v) =>
-    v.underlyingTokens?.some((t) => t.symbol === position.asset?.symbol)
-  )
-  const bestApy = allVaults[0]?.analytics?.apy?.total ?? 0
-  const currentApy = matchingVault?.analytics?.apy?.total ?? null
+function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
+  // After enrichment in earnApi.js, position now has:
+  // - position.apy (from vault analytics)
+  // - position.apy30d
+  // - position.vaultName
+  // - position.protocolName
+  // - position.vaultAddress (= position.asset.address = vault LP token)
+  // - position.underlyingTokens
+  // - position.balanceNative (raw LP token string)
+  // - position.balanceUsd
+  // - position._vaultData (full vault object)
+
+  const currentApy = position.apy
   const tag = getHealthTag(currentApy, bestApy)
+  const apyDisplay = currentApy != null ? `${(currentApy * 100).toFixed(2)}%` : 'N/A'
+  const chainName = getChainName(position.chainId)
+  const protocolName = position.protocolName ?? 'Unknown'
+  const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
 
-  const apyDisplay = currentApy != null
-    ? `${(currentApy * 100).toFixed(2)}%`
-    : 'N/A'
-
-  // Build a vault object for the modals — use matchingVault or synthesize from position
-  const vaultForModal = matchingVault ?? {
-    name: `${position.asset?.symbol ?? 'Unknown'} Vault`,
-    protocol: { name: position.protocolName ?? 'Unknown' },
-    network: `Chain ${position.chainId}`,
+  // Build vault object for modals
+  // Use _vaultData if available (most accurate), otherwise synthesize
+  const vaultForModal = position._vaultData ?? {
+    name: vaultName,
+    protocol: { name: protocolName },
+    network: chainName,
     chainId: position.chainId,
-    address: position.vaultAddress ?? position.address ?? '',
+    address: position.vaultAddress ?? position.asset?.address ?? '',
     analytics: {
       apy: { total: currentApy },
-      tvl: { usd: 0 },
+      apy30d: position.apy30d ?? null,
+      tvl: { usd: position.tvlUsd ?? 0 },
     },
-    underlyingTokens: position.asset ? [position.asset] : [],
+    underlyingTokens: position.underlyingTokens ?? (position.asset ? [position.asset] : []),
   }
 
   return (
@@ -260,12 +261,8 @@ function PositionCard({ position, allVaults, onDeposit, onWithdraw }) {
             <span className="material-symbols-outlined text-on-surface-variant">toll</span>
           </div>
           <div>
-            <h3 className="font-headline font-bold text-lg text-on-surface">
-              {position.asset?.symbol || 'Unknown'} Vault
-            </h3>
-            <p className="text-xs text-on-surface-variant font-medium">
-              {position.protocolName} · Chain {position.chainId}
-            </p>
+            <h3 className="font-headline font-bold text-lg text-on-surface">{vaultName}</h3>
+            <p className="text-xs text-on-surface-variant font-medium">{protocolName} · {chainName}</p>
           </div>
         </div>
         <div className="text-right">
@@ -273,6 +270,30 @@ function PositionCard({ position, allVaults, onDeposit, onWithdraw }) {
           <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">Current APY</span>
         </div>
       </div>
+
+      {/* APY breakdown if available */}
+      {position.apy30d != null && (
+        <div className="flex gap-4 mb-4 p-3 bg-surface-container rounded-xl">
+          <div className="flex-1 text-center">
+            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">1D APY</p>
+            <p className="font-bold text-sm text-on-surface mt-0.5">
+              {position.apy1d != null ? `${(position.apy1d * 100).toFixed(2)}%` : '—'}
+            </p>
+          </div>
+          <div className="flex-1 text-center border-x border-surface-container-high">
+            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">7D APY</p>
+            <p className="font-bold text-sm text-on-surface mt-0.5">
+              {position.apy7d != null ? `${(position.apy7d * 100).toFixed(2)}%` : '—'}
+            </p>
+          </div>
+          <div className="flex-1 text-center">
+            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">30D APY</p>
+            <p className="font-bold text-sm text-on-tertiary-container mt-0.5">
+              {`${(position.apy30d * 100).toFixed(2)}%`}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-6 mb-4">
         <div>
@@ -287,7 +308,6 @@ function PositionCard({ position, allVaults, onDeposit, onWithdraw }) {
         </div>
       </div>
 
-      {/* Deposit + Withdraw buttons */}
       <div className="flex gap-2 pt-2 border-t border-surface-container">
         <button
           onClick={() => onDeposit(vaultForModal)}
@@ -337,9 +357,8 @@ function DiagnosisSummary({ diagnosis, loading }) {
 
 function BestCrossChainCard({ vault, onDeposit }) {
   const apy = vault.analytics?.apy?.total != null
-    ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
-    : 'N/A'
-  const chainName = vault._chainName ?? vault.network ?? `Chain ${vault.chainId}`
+    ? `${(vault.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
+  const chainName = vault._chainName ?? vault.network ?? getChainName(vault.chainId)
   const tvlM = Number(vault.analytics?.tvl?.usd ?? 0) >= 1_000_000
     ? `$${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M`
     : `$${(Number(vault.analytics?.tvl?.usd ?? 0) / 1000).toFixed(0)}K`
@@ -385,8 +404,7 @@ function AlternativesTable({ vaults, onDeposit }) {
       <div className="divide-y divide-surface-container">
         {vaults.slice(0, 5).map((vault, i) => {
           const apy = vault.analytics.apy.total != null
-            ? `${(vault.analytics.apy.total * 100).toFixed(2)}%`
-            : 'N/A'
+            ? `${(vault.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
           return (
             <div key={i} className="p-4 flex justify-between items-center hover:bg-surface-container-low transition-colors">
               <div>

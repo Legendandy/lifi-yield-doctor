@@ -1,4 +1,16 @@
 // src/services/earnApi.js
+//
+// KEY INSIGHT from docs:
+// The portfolio endpoint returns positions with:
+//   - balanceNative: raw LP token amount (integer string) - use for withdrawals
+//   - balanceUsd: USD value
+//   - asset.address: the VAULT LP token address (e.g. mUSDC address)
+//   - NO apy, apy30d fields
+//
+// To get APY for a position, we must call:
+//   GET /v1/earn/vaults/:chainId/:vaultAddress
+// where vaultAddress = position.asset.address (the LP token IS the vault)
+
 import { getCached, setCached, CACHE_KEYS } from './vaultCache'
 
 const BASE = '/earn-api'
@@ -19,7 +31,7 @@ async function safeFetch(url) {
   return res.json()
 }
 
-// ─── Relaxed Sanity Filter ────────────────────────────────────────────────────
+// ─── Sanity Filter ────────────────────────────────────────────────────────────
 const ABSOLUTE_MAX_APY = 5.0
 const MIN_TVL_FOR_DISPLAY = 10_000
 
@@ -38,7 +50,6 @@ export function isVaultSane(vault) {
   }
 
   if (tvl < MIN_TVL_FOR_DISPLAY) return false
-
   return true
 }
 
@@ -58,6 +69,68 @@ export function computeVaultRankScore(vault) {
   }
 
   return apyScore * 0.50 + tvlScore * 0.35 + stabilityBonus
+}
+
+// ─── Fetch single vault by chainId + address ─────────────────────────────────
+export async function getVaultByAddress(chainId, address) {
+  const cacheKey = `vault:single:${chainId}:${address.toLowerCase()}`
+  const cached = getCached(cacheKey)
+  if (cached) return cached
+
+  try {
+    const data = await safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
+    setCached(cacheKey, data)
+    return data
+  } catch (err) {
+    console.warn(`[getVaultByAddress] Failed for chain ${chainId} addr ${address}:`, err.message)
+    return null
+  }
+}
+
+// ─── Portfolio positions with APY enrichment ──────────────────────────────────
+// The Earn API portfolio response does NOT include APY.
+// We fetch each vault individually to get analytics.apy.total, apy30d, etc.
+export async function getPortfolioPositions(userAddress) {
+  if (!userAddress) return []
+
+  const json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
+  const rawPositions = json.positions ?? []
+
+  if (rawPositions.length === 0) return []
+
+  // Enrich each position with full vault data (APY, 30d APY, TVL, underlying tokens)
+  const enriched = await Promise.allSettled(
+    rawPositions.map(async (pos) => {
+      // asset.address is the vault LP token address = the vault address
+      const vaultAddress = pos.asset?.address
+      if (!vaultAddress || !pos.chainId) return pos
+
+      const vaultData = await getVaultByAddress(pos.chainId, vaultAddress)
+      if (!vaultData) return pos
+
+      return {
+        ...pos,
+        // Full vault analytics
+        _vaultData: vaultData,
+        // APY fields (the main fix)
+        apy: vaultData.analytics?.apy?.total ?? null,
+        apy30d: vaultData.analytics?.apy30d ?? null,
+        apy7d: vaultData.analytics?.apy7d ?? null,
+        apy1d: vaultData.analytics?.apy1d ?? null,
+        tvlUsd: Number(vaultData.analytics?.tvl?.usd ?? 0),
+        // Vault identity
+        vaultAddress: vaultAddress,
+        vaultName: vaultData.name ?? pos.asset?.name ?? 'Unknown Vault',
+        protocolName: vaultData.protocol?.name ?? pos.protocolName ?? 'Unknown',
+        // Underlying tokens (needed for withdraw modal)
+        underlyingTokens: vaultData.underlyingTokens ?? [],
+        // balanceNative is already on pos - it's the raw LP token balance string
+        // Use this directly for withdrawals (no need to call balanceOf)
+      }
+    })
+  )
+
+  return enriched.map(r => (r.status === 'fulfilled' ? r.value : r.reason))
 }
 
 // ─── Fetch vaults for a specific chain with caching ───────────────────────────
@@ -89,9 +162,7 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
     pages++
 
     for (const vault of page) {
-      if (isVaultSane(vault)) {
-        all.push(vault)
-      }
+      if (isVaultSane(vault)) all.push(vault)
     }
 
     if (!cursor || page.length === 0) break
@@ -103,17 +174,14 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
 }
 
 // ─── Fetch best vault across ALL chains ──────────────────────────────────────
-// Used by the AI diagnosis to give a specific cross-chain recommendation
 export async function getBestVaultAcrossAllChains() {
   const cacheKey = CACHE_KEYS.allChainsBest
   const cached = getCached(cacheKey)
   if (cached) return cached
 
-  // Get chains first
   const chains = await getSupportedChains()
-
-  // Fetch top vaults from first 5 chains in parallel (to avoid too many requests)
   const topChains = chains.slice(0, 5)
+
   const results = await Promise.allSettled(
     topChains.map(chain =>
       getVaultsForChain({ chainId: chain.chainId, maxPages: 3 })
@@ -135,11 +203,7 @@ export async function getBestVaultAcrossAllChains() {
 }
 
 // ─── Paginated fetch ──────────────────────────────────────────────────────────
-export async function getVaultsPaged({
-  chainId,
-  pageSize = 20,
-  pageIndex = 0,
-} = {}) {
+export async function getVaultsPaged({ chainId, pageSize = 20, pageIndex = 0 } = {}) {
   const all = await getVaultsForChain({ chainId })
   const start = pageIndex * pageSize
   const end = start + pageSize
@@ -150,14 +214,9 @@ export async function getVaultsPaged({
   }
 }
 
-// ─── Legacy helpers ───────────────────────────────────────────────────────────
+// ─── Legacy vaults helper ─────────────────────────────────────────────────────
 export async function getVaults({
-  chainId,
-  asset,
-  protocol,
-  sortBy = 'apy',
-  minTvlUsd = 100_000,
-  limit = 20,
+  chainId, asset, protocol, sortBy = 'apy', minTvlUsd = 100_000, limit = 20,
 } = {}) {
   const params = new URLSearchParams()
   if (chainId) params.set('chainId', String(chainId))
@@ -177,14 +236,6 @@ export async function getVaults({
 
 export async function getVaultById(chainId, address) {
   return safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
-}
-
-export async function getPortfolioPositions(userAddress) {
-  if (!userAddress) return []
-  const json = await safeFetch(
-    `${BASE}/v1/earn/portfolio/${userAddress}/positions`
-  )
-  return json.positions ?? []
 }
 
 export async function getSupportedChains() {

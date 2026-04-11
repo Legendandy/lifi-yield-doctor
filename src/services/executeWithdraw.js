@@ -1,7 +1,7 @@
-// src/services/executeWithdraw.js
-// Withdrawal flow using LI.FI Composer in reverse:
-// The user's vault shares (LP tokens) are the fromToken; the underlying token is the toToken.
-// GET /v1/quote with vault LP token as fromToken → approve → send
+// src/services/executeDeposit.js
+// Full Composer integration — deposit from ANY token on ANY chain into ANY vault
+// Key fix: toToken = vault.address (the vault share/LP token)
+// For cross-chain this requires Composer to bridge+swap+deposit atomically
 
 import { ethers } from 'ethers'
 
@@ -9,28 +9,103 @@ const ERC20_ABI = [
   'function approve(address spender, uint256 amount) returns (bool)',
   'function allowance(address owner, address spender) view returns (uint256)',
   'function balanceOf(address owner) view returns (uint256)',
+  'function decimals() view returns (uint8)',
 ]
 
+const NATIVE_TOKEN_ADDRESSES = [
+  '0x0000000000000000000000000000000000000000',
+  '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+]
+
+function isNativeToken(address) {
+  if (!address) return true
+  return NATIVE_TOKEN_ADDRESSES.includes(address.toLowerCase())
+}
+
+function getLifiBase() {
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+    return '/lifi-api'
+  }
+  return 'https://li.quest'
+}
+
 /**
- * Execute a vault withdrawal via LI.FI Composer.
+ * Get a LI.FI Composer quote for depositing into a vault.
  *
- * For withdrawals, we swap the vault LP token back to the underlying token.
- * fromToken = vault LP token (vault.address)
- * toToken   = underlying token (vault.underlyingTokens[0].address)
- *
- * @param {object} opts
- * @param {object} opts.vault - vault object
- * @param {string} opts.userAddress - user wallet address
- * @param {string} opts.amount - raw amount of vault shares to withdraw
- * @param {boolean} opts.isFullWithdraw - if true, withdraw entire balance
- * @param {function} [opts.onTxSent] - called with txHash when tx is sent
+ * CRITICAL: toToken = vault.address (the vault's share/LP token address).
+ * This is what tells Composer to deposit into the vault rather than just swap/bridge.
+ * The vault address must be a token from a Composer-supported protocol.
  */
-export async function executeWithdraw({
+export async function getComposerQuote({
+  fromChain,
+  toChain,
+  fromToken,
+  toToken,
+  fromAddress,
+  fromAmount,
+  apiKey,
+}) {
+  const params = new URLSearchParams({
+    fromChain: String(fromChain),
+    toChain: String(toChain),
+    fromToken,
+    toToken,
+    fromAddress,
+    toAddress: fromAddress,
+    fromAmount: String(fromAmount),
+    slippage: '0.005',
+    integrator: 'yield-doctor',
+  })
+
+  const headers = { 'Content-Type': 'application/json' }
+  if (apiKey) headers['x-lifi-api-key'] = apiKey
+
+  const base = getLifiBase()
+  const res = await fetch(`${base}/v1/quote?${params}`, { headers })
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => res.statusText)
+    if (res.status === 404 || errText.toLowerCase().includes('no routes')) {
+      throw new Error(
+        'No deposit route found. This vault may not be supported by Composer, or try a different source token.'
+      )
+    }
+    if (res.status === 422) {
+      throw new Error(`Deposit not supported for this vault/token combination: ${errText.slice(0, 200)}`)
+    }
+    throw new Error(`Quote failed (${res.status}): ${errText.slice(0, 200)}`)
+  }
+
+  const quote = await res.json()
+
+  if (quote.message && !quote.transactionRequest) {
+    throw new Error(`Quote error: ${quote.message}`)
+  }
+  if (!quote.transactionRequest) {
+    throw new Error('No transaction data returned from Composer. Please try again.')
+  }
+
+  return quote
+}
+
+/**
+ * Execute a vault deposit via LI.FI Composer.
+ *
+ * For same-chain: fromToken → vault (swap + deposit in one tx)
+ * For cross-chain: fromToken on fromChain → vault on toChain (bridge + swap + deposit in one tx)
+ *
+ * The wallet MUST be on fromChainId when sending the transaction.
+ */
+export async function executeDeposit({
   vault,
+  fromToken,
+  fromAmount,
   userAddress,
-  amount,
-  isFullWithdraw,
-  onTxSent,
+  fromChainId,
+  onApprovalSent,
+  onApprovalDone,
+  onDepositSent,
+  onCrossChainPending,
 }) {
   if (!window.ethereum) {
     throw new Error('No wallet detected. Please install MetaMask or another Web3 wallet.')
@@ -39,94 +114,118 @@ export async function executeWithdraw({
   const provider = new ethers.BrowserProvider(window.ethereum)
   const signer = await provider.getSigner()
 
-  // Validate chain
   const network = await provider.getNetwork()
   const walletChainId = Number(network.chainId)
-  if (walletChainId !== vault.chainId) {
+
+  const sourceChainId = fromChainId ?? walletChainId
+  const destChainId = vault.chainId
+  const isCrossChain = sourceChainId !== destChainId
+
+  // Ensure wallet is on the correct source chain
+  if (walletChainId !== sourceChainId) {
     throw new Error(
-      `Wallet is on chain ${walletChainId} but vault is on chain ${vault.chainId}. Please switch networks first.`
+      `Wallet is on chain ${walletChainId} but deposit requires chain ${sourceChainId}. Please switch networks.`
     )
   }
 
-  // If full withdraw, get actual on-chain balance
-  let withdrawAmount = amount
-  if (isFullWithdraw) {
-    try {
-      const vaultToken = new ethers.Contract(vault.address, ERC20_ABI, provider)
-      const bal = await vaultToken.balanceOf(userAddress)
-      withdrawAmount = bal.toString()
-      if (withdrawAmount === '0') {
-        throw new Error('No vault shares found in your wallet. Your position may already be withdrawn.')
-      }
-    } catch (err) {
-      if (err.message.includes('No vault shares')) throw err
-      // If contract call fails, fall back to provided amount
-      withdrawAmount = amount
-    }
+  const apiKey = import.meta.env.VITE_LIFI_API_KEY
+
+  // Validate fromAmount is a valid integer string
+  let rawAmount
+  try {
+    rawAmount = BigInt(fromAmount).toString()
+    if (rawAmount === '0') throw new Error('Amount is zero')
+  } catch {
+    throw new Error(`Invalid deposit amount: ${fromAmount}`)
   }
 
-  const underlyingToken = vault.underlyingTokens?.[0]
-  if (!underlyingToken) {
-    throw new Error('No underlying token found for this vault.')
-  }
-
-  // Build quote: vault LP → underlying token
-  const quoteParams = new URLSearchParams({
-    fromChain: String(vault.chainId),
-    toChain: String(vault.chainId),
-    fromToken: vault.address, // vault LP/share token
-    toToken: underlyingToken.address,
+  // Get Composer quote
+  // toToken = vault.address — this is the key: vault share token triggers Composer deposit action
+  const quote = await getComposerQuote({
+    fromChain: walletChainId,
+    toChain: destChainId,
+    fromToken: fromToken.address,
+    toToken: vault.address,
     fromAddress: userAddress,
-    toAddress: userAddress,
-    fromAmount: withdrawAmount,
-    slippage: '0.005',
+    fromAmount: rawAmount,
+    apiKey,
   })
 
-  const apiKey = import.meta.env.VITE_LIFI_API_KEY
-  const headers = { 'Content-Type': 'application/json' }
-  if (apiKey) headers['x-lifi-api-key'] = apiKey
+  // Handle ERC-20 approval using quote.estimate.approvalAddress
+  const native = isNativeToken(fromToken.address)
 
-  const quoteRes = await fetch(`https://li.quest/v1/quote?${quoteParams}`, { headers })
-
-  if (!quoteRes.ok) {
-    const errText = await quoteRes.text().catch(() => quoteRes.statusText)
-    if (quoteRes.status === 404 || errText.includes('No routes')) {
-      throw new Error('No withdrawal route found. You may need to withdraw directly on the protocol\'s website.')
-    }
-    throw new Error(`Quote failed (${quoteRes.status}): ${errText.slice(0, 200)}`)
-  }
-
-  const quote = await quoteRes.json()
-
-  if (!quote.transactionRequest) {
-    throw new Error('No transaction data returned. Please try again.')
-  }
-
-  // Approve vault shares if needed
-  if (quote.estimate?.approvalAddress) {
-    const erc20 = new ethers.Contract(vault.address, ERC20_ABI, signer)
+  if (!native && quote.estimate?.approvalAddress) {
+    const erc20 = new ethers.Contract(fromToken.address, ERC20_ABI, signer)
     const owner = await signer.getAddress()
     const spender = quote.estimate.approvalAddress
 
-    let currentAllowance
+    let currentAllowance = 0n
     try {
       currentAllowance = await erc20.allowance(owner, spender)
     } catch {
       currentAllowance = 0n
     }
 
-    if (currentAllowance < BigInt(withdrawAmount)) {
-      const approveTx = await erc20.approve(spender, withdrawAmount)
+    const needed = BigInt(rawAmount)
+    if (currentAllowance < needed) {
+      onApprovalSent?.()
+      const approveTx = await erc20.approve(spender, rawAmount)
       await approveTx.wait()
+      onApprovalDone?.()
+    } else {
+      onApprovalDone?.()
     }
+  } else {
+    onApprovalDone?.()
   }
 
-  // Send withdrawal transaction
+  // Send the transaction
   const tx = await signer.sendTransaction(quote.transactionRequest)
-  onTxSent?.(tx.hash)
+  onDepositSent?.(tx.hash)
 
   const receipt = await tx.wait()
-  console.log('[executeWithdraw] Confirmed in block:', receipt.blockNumber)
+  console.log('[executeDeposit] Confirmed in block:', receipt.blockNumber)
 
-  return { txHash: tx.hash, receipt }
+  if (isCrossChain) {
+    onCrossChainPending?.(tx.hash)
+    pollCrossChainStatus(tx.hash, walletChainId, destChainId, apiKey).catch(err => {
+      console.warn('[executeDeposit] Cross-chain poll error:', err)
+    })
+  }
+
+  return {
+    txHash: tx.hash,
+    receipt,
+    isCrossChain,
+    quote,
+  }
+}
+
+/**
+ * Poll /v1/status for cross-chain transfers.
+ */
+export async function pollCrossChainStatus(txHash, fromChain, toChain, apiKey, maxAttempts = 60) {
+  const headers = {}
+  if (apiKey) headers['x-lifi-api-key'] = apiKey
+
+  const base = getLifiBase()
+
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, 5000))
+    try {
+      const params = new URLSearchParams({
+        txHash,
+        fromChain: String(fromChain),
+        toChain: String(toChain),
+      })
+      const res = await fetch(`${base}/v1/status?${params}`, { headers })
+      if (!res.ok) continue
+      const data = await res.json()
+      console.log(`[pollCrossChainStatus] ${data.status} (${data.substatus ?? ''})`)
+      if (data.status === 'DONE' || data.status === 'FAILED') return data
+    } catch {
+      // Keep polling
+    }
+  }
+  return null
 }
