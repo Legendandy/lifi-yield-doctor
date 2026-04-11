@@ -7,9 +7,9 @@
 //   - asset.address: the VAULT LP token address (e.g. mUSDC address)
 //   - NO apy, apy30d fields
 //
-// To get APY for a position, we must call:
-//   GET /v1/earn/vaults/:chainId/:vaultAddress
-// where vaultAddress = position.asset.address (the LP token IS the vault)
+// APY fix: we call GET /v1/earn/vaults/:chainId/:vaultAddress for each position.
+// The vault endpoint DOES return analytics.apy.total, apy30d, etc.
+// We also store isTransactional and isRedeemable from the vault response.
 
 import { getCached, setCached, CACHE_KEYS } from './vaultCache'
 
@@ -73,16 +73,23 @@ export function computeVaultRankScore(vault) {
 
 // ─── Fetch single vault by chainId + address ─────────────────────────────────
 export async function getVaultByAddress(chainId, address) {
+  if (!chainId || !address) return null
+
   const cacheKey = `vault:single:${chainId}:${address.toLowerCase()}`
   const cached = getCached(cacheKey)
   if (cached) return cached
 
   try {
     const data = await safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
-    setCached(cacheKey, data)
-    return data
+    if (data && data.analytics) {
+      setCached(cacheKey, data)
+      return data
+    }
+    // Response came back but has no analytics — log and return null
+    console.warn(`[getVaultByAddress] No analytics in response for chain ${chainId} addr ${address.slice(0,10)}`)
+    return null
   } catch (err) {
-    console.warn(`[getVaultByAddress] Failed for chain ${chainId} addr ${address}:`, err.message)
+    console.warn(`[getVaultByAddress] Failed for chain ${chainId} addr ${address.slice(0,10)}:`, err.message)
     return null
   }
 }
@@ -90,43 +97,74 @@ export async function getVaultByAddress(chainId, address) {
 // ─── Portfolio positions with APY enrichment ──────────────────────────────────
 // The Earn API portfolio response does NOT include APY.
 // We fetch each vault individually to get analytics.apy.total, apy30d, etc.
+// Also picks up isTransactional + isRedeemable from the vault response.
 export async function getPortfolioPositions(userAddress) {
   if (!userAddress) return []
 
-  const json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
-  const rawPositions = json.positions ?? []
+  let json
+  try {
+    json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
+  } catch (err) {
+    console.error('[getPortfolioPositions] Failed:', err.message)
+    return []
+  }
 
+  const rawPositions = json.positions ?? []
   if (rawPositions.length === 0) return []
+
+  console.log(`[getPortfolioPositions] ${rawPositions.length} positions, enriching with vault data...`)
 
   // Enrich each position with full vault data (APY, 30d APY, TVL, underlying tokens)
   const enriched = await Promise.allSettled(
     rawPositions.map(async (pos) => {
       // asset.address is the vault LP token address = the vault address
       const vaultAddress = pos.asset?.address
-      if (!vaultAddress || !pos.chainId) return pos
+      if (!vaultAddress || !pos.chainId) {
+        console.warn(`[getPortfolioPositions] Skipping position without address/chainId:`, pos.asset?.symbol)
+        return pos
+      }
 
       const vaultData = await getVaultByAddress(pos.chainId, vaultAddress)
-      if (!vaultData) return pos
 
-      return {
+      if (!vaultData) {
+        console.warn(`[getPortfolioPositions] Could not enrich ${pos.asset?.symbol} on chain ${pos.chainId} — APY will show N/A`)
+        return {
+          ...pos,
+          apy: null,
+          apy30d: null,
+          apy7d: null,
+          apy1d: null,
+          vaultAddress,
+          vaultName: pos.asset?.name ?? 'Unknown Vault',
+          protocolName: pos.protocolName ?? 'Unknown',
+          underlyingTokens: [],
+        }
+      }
+
+      const enrichedPos = {
         ...pos,
-        // Full vault analytics
+        // Full vault object for modals
         _vaultData: vaultData,
-        // APY fields (the main fix)
+        // APY fields — THIS is the fix for N/A
         apy: vaultData.analytics?.apy?.total ?? null,
         apy30d: vaultData.analytics?.apy30d ?? null,
         apy7d: vaultData.analytics?.apy7d ?? null,
         apy1d: vaultData.analytics?.apy1d ?? null,
         tvlUsd: Number(vaultData.analytics?.tvl?.usd ?? 0),
+        // Composer support flags
+        isTransactional: vaultData.isTransactional,
+        isRedeemable: vaultData.isRedeemable,
         // Vault identity
-        vaultAddress: vaultAddress,
+        vaultAddress,
         vaultName: vaultData.name ?? pos.asset?.name ?? 'Unknown Vault',
         protocolName: vaultData.protocol?.name ?? pos.protocolName ?? 'Unknown',
         // Underlying tokens (needed for withdraw modal)
         underlyingTokens: vaultData.underlyingTokens ?? [],
-        // balanceNative is already on pos - it's the raw LP token balance string
-        // Use this directly for withdrawals (no need to call balanceOf)
+        // balanceNative is already on pos — raw LP token balance string
       }
+
+      console.log(`[getPortfolioPositions] Enriched ${enrichedPos.vaultName}: APY=${enrichedPos.apy != null ? (enrichedPos.apy * 100).toFixed(2) + '%' : 'N/A'}`)
+      return enrichedPos
     })
   )
 

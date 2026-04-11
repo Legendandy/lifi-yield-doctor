@@ -1,16 +1,8 @@
 // src/components/DepositModal.jsx
-// 2-step UX (restored from original):
-//   Step 1 — pick source chain + token (ALL tokens from LI.FI API, real balances)
-//   Step 2 — enter amount + execute deposit
-//
-// Fixes:
-// - Chain switcher right in the modal (no need to close modal to switch chain)
-// - Token list uses LI.FI /v1/tokens for ALL tokens (USDe, EURC, etc.)
-// - Balances use wallet provider directly for the connected chain → no zero balance bug
-// - Continue button always visible, no scrolling needed
-// - Defaults to vault chain + underlying token on open
-// - Cross-chain notice is a single compact text line — no banner, no height change
-// - Stablecoin 2dp formatting handled in tokenBalances.js, not here
+// Changes:
+// - Cross-chain disabled when vault.isTransactional === false
+// - Stuck "Preparing Deposit" toast dismissed on error/cancel
+// - isTransactional badge shown in modal header
 
 import { useState, useEffect, useRef } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
@@ -42,7 +34,7 @@ function StepIndicator({ label, status }) {
 }
 
 // ─── Step 1: Source picker ────────────────────────────────────────────────────
-function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletChainId }) {
+function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletChainId, crossChainEnabled }) {
   const { address } = useAccount()
   const { switchChainAsync } = useSwitchChain()
 
@@ -57,7 +49,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
 
   const chainPickerRef = useRef(null)
 
-  // Close dropdown on outside click
   useEffect(() => {
     function handler(e) {
       if (chainPickerRef.current && !chainPickerRef.current.contains(e.target)) {
@@ -68,7 +59,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // Load tokens whenever chain changes
   useEffect(() => {
     if (!address || !selectedChainId) return
     setLoadingTokens(true)
@@ -79,7 +69,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
     getTokenBalancesOnChain(address, selectedChainId)
       .then(list => {
         setTokens(list)
-        // Default: match vault underlying token symbol, else first with balance, else first
         const vaultSymbol = vaultUnderlyingToken?.symbol?.toUpperCase()
         const bySymbol    = vaultSymbol ? list.find(t => t.symbol?.toUpperCase() === vaultSymbol) : null
         const withBal     = list.find(t => t.balanceFloat > 0)
@@ -100,7 +89,7 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
     try {
       await switchChainAsync({ chainId })
     } catch {
-      // User rejected or can't switch — that's fine, we'll use public RPC
+      // User rejected or can't switch — that's fine
     } finally {
       setSwitchingChain(false)
     }
@@ -115,10 +104,25 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
 
   const isCrossChain = selectedChainId !== vaultChainId
 
+  // Chains available for selection
+  const availableChains = crossChainEnabled
+    ? SUPPORTED_CHAINS
+    : SUPPORTED_CHAINS.filter(c => c.id === vaultChainId)
+
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── Chain picker ── */}
+      {/* Cross-chain disabled notice */}
+      {!crossChainEnabled && (
+        <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <span className="material-symbols-outlined text-amber-500 text-[16px]">info</span>
+          <p className="text-xs font-medium text-amber-800">
+            This vault only supports same-chain deposits. Cross-chain bridging is not available.
+          </p>
+        </div>
+      )}
+
+      {/* Chain picker */}
       <div>
         <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant block mb-2">
           Deposit from chain
@@ -126,9 +130,11 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
         <div className="relative" ref={chainPickerRef}>
           <button
             type="button"
-            onClick={() => setShowChainPicker(o => !o)}
-            disabled={switchingChain}
-            className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 border-surface-container-high bg-surface-container-low hover:border-primary-container/40 transition-all text-left disabled:opacity-60"
+            onClick={() => crossChainEnabled && setShowChainPicker(o => !o)}
+            disabled={switchingChain || !crossChainEnabled}
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 border-surface-container-high bg-surface-container-low transition-all text-left
+              ${crossChainEnabled ? 'hover:border-primary-container/40' : 'opacity-60 cursor-not-allowed'}
+              disabled:opacity-60`}
           >
             <div className="flex items-center gap-2 min-w-0">
               <span className="font-bold text-sm text-on-surface truncate">{getChainName(selectedChainId)}</span>
@@ -137,7 +143,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
                   Wallet
                 </span>
               )}
-              {/* Inline cross-chain badge — sits in the button row, adds zero height */}
               {isCrossChain && (
                 <span className="text-[10px] bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-0.5 rounded-full font-black shrink-0 flex items-center gap-0.5">
                   <span className="material-symbols-outlined text-[11px]">bolt</span>
@@ -147,14 +152,16 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
             </div>
             {switchingChain
               ? <span className="material-symbols-outlined text-[16px] text-on-surface-variant animate-spin shrink-0">progress_activity</span>
-              : <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">expand_more</span>
+              : crossChainEnabled
+                ? <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">expand_more</span>
+                : <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">lock</span>
             }
           </button>
 
-          {showChainPicker && (
+          {showChainPicker && crossChainEnabled && (
             <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-2xl shadow-2xl border border-surface-container z-[200] overflow-hidden">
               <div className="grid grid-cols-2 gap-1 p-2 max-h-48 overflow-y-auto">
-                {SUPPORTED_CHAINS.map(chain => (
+                {availableChains.map(chain => (
                   <button
                     key={chain.id}
                     type="button"
@@ -176,15 +183,14 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
           )}
         </div>
 
-        {/* Cross-chain hint — single compact line, no box/banner, no extra padding */}
-        {isCrossChain && (
+        {isCrossChain && crossChainEnabled && (
           <p className="mt-1.5 text-[11px] text-on-tertiary-container font-semibold px-1 leading-tight">
             ⚡ Composer bridges {getChainName(selectedChainId)} → {getChainName(vaultChainId)} and deposits in one tx.
           </p>
         )}
       </div>
 
-      {/* ── Token picker ── */}
+      {/* Token picker */}
       <div className="flex flex-col gap-2 min-h-0">
         <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant shrink-0">
           Token to deposit
@@ -196,7 +202,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
           </div>
         ) : (
           <>
-            {/* Search */}
             <div className="relative shrink-0">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-[14px] text-on-surface-variant">search</span>
               <input
@@ -207,7 +212,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
               />
             </div>
 
-            {/* Token list — restricted height so Continue is always visible */}
             <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: '168px' }}>
               {filtered.length === 0 && (
                 <p className="text-center text-sm text-on-surface-variant py-4">No tokens found</p>
@@ -243,8 +247,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
                       <p className="text-[10px] text-on-surface-variant truncate">{token.name}</p>
                     </div>
                     <div className="text-right shrink-0">
-                      {/* formattedBalance precision is handled in tokenBalances.js:
-                          stablecoins → 2dp, ETH/BTC/etc → full meaningful precision */}
                       <p className={`font-bold text-sm ${hasBalance ? 'text-on-surface' : 'text-on-surface-variant/50'}`}>
                         {token.formattedBalance}
                       </p>
@@ -260,7 +262,6 @@ function SourcePicker({ onConfirm, vaultChainId, vaultUnderlyingToken, walletCha
         )}
       </div>
 
-      {/* ── Continue button — always visible, never needs scrolling ── */}
       <button
         type="button"
         onClick={() => selectedToken && onConfirm({ chainId: selectedChainId, token: selectedToken })}
@@ -329,6 +330,9 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
     if (!isValid || !sourceToken) return
     setError(null)
 
+    // This toast ID needs to be accessible in catch block
+    let approvingId = null
+
     try {
       if (walletChainId !== sourceChainId) {
         setTxStep('switching')
@@ -344,8 +348,8 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
       }
 
       setTxStep('approving')
-      const rawAmount    = toRaw(amount, sourceToken.decimals)
-      const approvingId  = toast.loading('Preparing Deposit', 'Building transaction via Composer...')
+      const rawAmount = toRaw(amount, sourceToken.decimals)
+      approvingId = toast.loading('Preparing Deposit', 'Building transaction via Composer...')
 
       const result = await executeDeposit({
         vault,
@@ -358,10 +362,11 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
         },
         onApprovalDone: () => {
           toast.update(approvingId, { type: 'success', title: 'Approved', message: `${sourceToken.symbol} approved`, duration: 2000 })
+          approvingId = null // cleared — success toast auto-dismisses
           setTxStep('depositing')
         },
         onDepositSent: (txHash) => {
-          toast.dismiss(approvingId)
+          if (approvingId) { toast.dismiss(approvingId); approvingId = null }
           isCrossChain
             ? toast.tx('Cross-Chain Deposit Sent', txHash, { title: 'Bridge + Deposit In Progress' })
             : toast.tx('Deposit Submitted', txHash, { title: 'Transaction Sent' })
@@ -373,6 +378,8 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
         },
       })
 
+      if (approvingId) { toast.dismiss(approvingId); approvingId = null }
+
       if (!result.isCrossChain) {
         setTxStep('done')
         toast.success('Deposit Successful! 🎉', `${amount} ${sourceToken.symbol} deposited into ${vault.name}`, { duration: 8000 })
@@ -382,6 +389,9 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
         setCrossChainTxHash(result.txHash)
       }
     } catch (err) {
+      // Always dismiss the loading toast on error
+      if (approvingId) { toast.dismiss(approvingId); approvingId = null }
+
       const msg = err?.message ?? ''
       const isRejected = msg.toLowerCase().includes('user rejected') || msg.toLowerCase().includes('rejected')
       setTxStep('idle')
@@ -624,6 +634,10 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
   const [modalStep, setModalStep] = useState('pick-source') // pick-source | amount
   const [source, setSource] = useState(null)
 
+  // isTransactional controls whether cross-chain deposits are allowed
+  // If the field is missing/undefined, default to true (backwards compat)
+  const crossChainEnabled = vault?.isTransactional !== false
+
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
       <div
@@ -634,7 +648,7 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
       <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl flex flex-col"
            style={{ maxHeight: '92vh' }}>
 
-        {/* Header — fixed */}
+        {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-surface-container shrink-0">
           <div className="flex items-center justify-between">
             <div className="min-w-0 pr-4">
@@ -646,10 +660,24 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
                 {vault?.analytics?.apy?.total != null ? ` · ${(vault.analytics.apy.total * 100).toFixed(2)}% APY` : ''}
               </p>
             </div>
-            <button onClick={onClose}
-              className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors shrink-0">
-              <span className="material-symbols-outlined text-[16px] text-on-surface-variant">close</span>
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Composer badge */}
+              {crossChainEnabled ? (
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-1 rounded-full">
+                  <span className="material-symbols-outlined text-[10px]">bolt</span>
+                  Composer
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-surface-container text-on-surface-variant px-2 py-1 rounded-full">
+                  <span className="material-symbols-outlined text-[10px]">lock</span>
+                  Same-chain only
+                </span>
+              )}
+              <button onClick={onClose}
+                className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors">
+                <span className="material-symbols-outlined text-[16px] text-on-surface-variant">close</span>
+              </button>
+            </div>
           </div>
 
           {/* Step pills */}
@@ -669,7 +697,7 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
           </div>
         </div>
 
-        {/* Body — scrollable */}
+        {/* Body */}
         <div className="p-6 overflow-y-auto flex-1">
           {modalStep === 'pick-source' ? (
             <SourcePicker
@@ -677,6 +705,7 @@ export default function DepositModal({ vault, onClose, onSuccess }) {
               vaultChainId={vault?.chainId}
               vaultUnderlyingToken={vault?.underlyingTokens?.[0]}
               walletChainId={walletChainId}
+              crossChainEnabled={crossChainEnabled}
             />
           ) : (
             <AmountStep

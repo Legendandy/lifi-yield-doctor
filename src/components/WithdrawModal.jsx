@@ -1,13 +1,7 @@
 // src/components/WithdrawModal.jsx
-//
-// KEY FIXES:
-// 1. Uses position.balanceNative (raw LP token string from API) for "Withdraw All"
-//    - No more "Could not determine amount" - balanceNative IS the exact balance
-// 2. Input is never disabled - user can always type an amount
-// 3. MAX button uses position.balanceNative converted to human-readable
-// 4. APY shown from vault.analytics.apy.total
-// 5. Destination tokens use LI.FI SDK (same as DepositModal)
-// 6. Amount validation uses correct integer conversion
+// Changes:
+// - isRedeemable=false disables withdrawals entirely
+// - isRedeemable=false shows a clear "withdrawal not supported" message
 
 import { useState, useEffect, useRef } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
@@ -37,10 +31,6 @@ function getLifiBase() {
   return 'https://li.quest'
 }
 
-/**
- * Convert human-readable amount to raw integer string.
- * "1.5" decimals=6 → "1500000"
- */
 function toRawAmountStr(humanAmount, decimals) {
   if (!humanAmount || isNaN(parseFloat(humanAmount))) return '0'
   const str = String(humanAmount).trim()
@@ -53,22 +43,16 @@ function toRawAmountStr(humanAmount, decimals) {
   return (BigInt(whole) * BigInt(10 ** decimals) + BigInt(frac)).toString()
 }
 
-/**
- * Execute withdrawal via Composer.
- * fromToken = vault address (vault LP/share token)
- * toToken   = desired output token
- */
 async function executeWithdrawViaComposer({
   vault,
   userAddress,
-  withdrawAmountRaw,  // raw integer string (LP token units)
+  withdrawAmountRaw,
   destChainId,
   destToken,
   onTxSent,
 }) {
   if (!window.ethereum) throw new Error('No wallet detected.')
 
-  // Validate amount
   let rawAmount
   try {
     rawAmount = BigInt(withdrawAmountRaw).toString()
@@ -92,7 +76,6 @@ async function executeWithdrawViaComposer({
 
   const base = getLifiBase()
 
-  // Withdrawal: fromToken = vault LP token, toToken = what user wants to receive
   const params = new URLSearchParams({
     fromChain: String(vault.chainId),
     toChain: String(destChainId),
@@ -105,19 +88,10 @@ async function executeWithdrawViaComposer({
     integrator: 'yield-doctor',
   })
 
-  console.log('[Withdraw] Quote request:', {
-    fromToken: vault.address.slice(0, 10),
-    toToken: destToken.address.slice(0, 10),
-    fromAmount: rawAmount,
-    destChainId,
-  })
-
   const quoteRes = await fetch(`${base}/v1/quote?${params}`, { headers: reqHeaders })
 
   if (!quoteRes.ok) {
     const errText = await quoteRes.text().catch(() => quoteRes.statusText)
-    console.error('[Withdraw] Quote failed:', quoteRes.status, errText.slice(0, 200))
-
     if (quoteRes.status === 404 || errText.toLowerCase().includes('no routes')) {
       throw new Error(
         'No withdrawal route found. Try withdrawing to the underlying token on the same chain first.'
@@ -131,7 +105,6 @@ async function executeWithdrawViaComposer({
     throw new Error('No transaction data returned for withdrawal. Please try again.')
   }
 
-  // Approve vault shares if needed
   if (quote.estimate?.approvalAddress) {
     const erc20 = new ethers.Contract(vault.address, ERC20_ABI, signer)
     const owner = await signer.getAddress()
@@ -150,7 +123,6 @@ async function executeWithdrawViaComposer({
   return { txHash: tx.hash, receipt }
 }
 
-// ─── Step Indicator ────────────────────────────────────────────────────────────
 function StepIndicator({ label, status }) {
   return (
     <div className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
@@ -168,7 +140,6 @@ function StepIndicator({ label, status }) {
   )
 }
 
-// ─── Destination Token Picker (uses LI.FI SDK like DepositModal) ──────────────
 function DestTokenPicker({ destChainId, selectedToken, onTokenSelect, walletAddress }) {
   const [tokens, setTokens] = useState([])
   const [loading, setLoading] = useState(false)
@@ -290,7 +261,6 @@ function DestTokenPicker({ destChainId, selectedToken, onTokenSelect, walletAddr
   )
 }
 
-// ─── Chain Picker ─────────────────────────────────────────────────────────────
 function ChainPicker({ value, onChange, label }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -340,11 +310,14 @@ function ChainPicker({ value, onChange, label }) {
   )
 }
 
-// ─── Main Modal ────────────────────────────────────────────────────────────────
 export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const { address, chainId: walletChainId } = useAccount()
   const { switchChainAsync } = useSwitchChain()
   const toast = useToast()
+
+  // isRedeemable controls whether withdrawals via Composer are supported
+  // If field is missing/undefined, default to true (backwards compat)
+  const withdrawalEnabled = vault?.isRedeemable !== false
 
   const vaultChainId = vault?.chainId ?? position?.chainId
   const underlyingTokens = vault?.underlyingTokens ?? position?.underlyingTokens ?? []
@@ -352,23 +325,15 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const underlyingSymbol = underlyingToken?.symbol ?? position?.asset?.symbol ?? 'tokens'
   const underlyingDecimals = underlyingToken?.decimals ?? 18
 
-  // APY display - from vault analytics
   const apy = vault?.analytics?.apy?.total ?? position?.apy
   const apy30d = vault?.analytics?.apy30d ?? position?.apy30d
   const apyDisplay = apy != null ? `${(apy * 100).toFixed(2)}%` : 'N/A'
   const apy30dDisplay = apy30d != null ? `${(apy30d * 100).toFixed(2)}%` : 'N/A'
 
-  // POSITION BALANCE:
-  // balanceNative = raw LP token integer string (e.g. "4901960784313725490196")
-  // balanceUsd = USD value string
-  //
-  // To get human-readable LP token amount, we need LP token decimals.
-  // LP token decimals: vault.lpTokens[0].decimals OR default 18
   const lpDecimals = vault?.lpTokens?.[0]?.decimals ?? underlyingDecimals ?? 18
-  const balanceNativeRaw = position?.balanceNative ?? null  // raw LP token string
+  const balanceNativeRaw = position?.balanceNative ?? null
   const balanceUsd = Number(position?.balanceUsd ?? vault?._positionBalanceUsd ?? 0)
 
-  // Human-readable LP token balance
   let lpBalanceHuman = 0
   if (balanceNativeRaw) {
     try {
@@ -376,17 +341,12 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     } catch { lpBalanceHuman = 0 }
   }
 
-  // For display and partial withdraw max, use underlying token equivalent
-  // Since most vaults are 1:1 with underlying (or close), use balanceUsd / price
-  // But we'll use lpBalanceHuman for the raw withdrawal amount
   const hasBalance = balanceNativeRaw != null && balanceNativeRaw !== '0'
 
-  // Destination
   const [destMode, setDestMode] = useState('same')
   const [destChainId, setDestChainId] = useState(vaultChainId)
   const [destToken, setDestToken] = useState(underlyingToken)
 
-  // Form state
   const [amount, setAmount] = useState('')
   const [withdrawType, setWithdrawType] = useState('partial')
   const [txStep, setTxStep] = useState('idle')
@@ -407,8 +367,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const needsChainSwitch = walletChainId !== vaultChainId
   const isCrossChainWithdraw = destChainId !== vaultChainId
 
-  // Partial amount is in underlying token units (human-readable)
-  // We'll convert to LP token raw amount for the API
   const isValidPartial = withdrawType === 'partial' && amountNum > 0 && amount.trim() !== ''
   const isValidFull = withdrawType === 'full' && hasBalance
   const isValid = isValidPartial || isValidFull
@@ -426,11 +384,10 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
   function handleDestChainChange(newChainId) {
     setDestChainId(newChainId)
-    setDestToken(null) // reset, DestTokenPicker will load new tokens
+    setDestToken(null)
   }
 
   function setMax() {
-    // Set amount to human-readable LP balance
     if (lpBalanceHuman > 0) {
       setAmount(lpBalanceHuman.toFixed(6))
     }
@@ -447,7 +404,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     setError(null)
 
     try {
-      // Switch to vault chain if needed
       if (needsChainSwitch) {
         setTxStep('switching')
         try {
@@ -465,10 +421,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
       let withdrawAmountRaw
       if (withdrawType === 'full') {
-        // Use balanceNative directly - this is the exact LP token balance from the API
-        // No need to call balanceOf - the API already gave us this
         if (!balanceNativeRaw || balanceNativeRaw === '0') {
-          // Fallback: try to fetch on-chain
           try {
             const provider = new ethers.BrowserProvider(window.ethereum)
             const contract = new ethers.Contract(vault.address, ERC20_ABI, provider)
@@ -485,14 +438,12 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
           withdrawAmountRaw = balanceNativeRaw
         }
       } else {
-        // Partial: convert user input (in LP token units) to raw integer
         withdrawAmountRaw = toRawAmountStr(amount, lpDecimals)
         if (withdrawAmountRaw === '0') {
           throw new Error('Invalid amount entered.')
         }
       }
 
-      // Validate
       try {
         const check = BigInt(withdrawAmountRaw)
         if (check === 0n) throw new Error('Amount is zero')
@@ -554,294 +505,341 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-headline font-extrabold text-xl text-on-surface">Withdraw</h2>
-              <p className="text-xs text-on-surface-variant mt-0.5 font-medium truncate max-w-[280px]">{vault?.name}</p>
+              <p className="text-xs text-on-surface-variant mt-0.5 font-medium truncate max-w-[220px]">{vault?.name}</p>
             </div>
-            <button onClick={onClose} disabled={isBusy}
-              className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors disabled:opacity-40">
-              <span className="material-symbols-outlined text-[16px] text-on-surface-variant">close</span>
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Redeemable badge */}
+              {withdrawalEnabled ? (
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-1 rounded-full">
+                  <span className="material-symbols-outlined text-[10px]">check_circle</span>
+                  Redeemable
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-error/10 text-error px-2 py-1 rounded-full">
+                  <span className="material-symbols-outlined text-[10px]">block</span>
+                  Not redeemable
+                </span>
+              )}
+              <button onClick={onClose} disabled={isBusy}
+                className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors disabled:opacity-40">
+                <span className="material-symbols-outlined text-[16px] text-on-surface-variant">close</span>
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="p-6 space-y-5 overflow-y-auto flex-1">
-          {/* Vault summary */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-surface-container rounded-xl p-3 text-center">
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">APY</p>
-              <p className="font-headline font-black text-base text-on-tertiary-container">{apyDisplay}</p>
-            </div>
-            <div className="bg-surface-container rounded-xl p-3 text-center">
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">30D APY</p>
-              <p className="font-headline font-black text-base text-on-surface">{apy30dDisplay}</p>
-            </div>
-            <div className="bg-surface-container rounded-xl p-3 text-center">
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Network</p>
-              <p className="font-bold text-sm text-on-surface truncate">{getChainName(vaultChainId)}</p>
-            </div>
-          </div>
 
-          {/* Position balance display */}
-          <div className="flex items-center justify-between p-3 bg-surface-container rounded-xl">
-            <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Your Position</p>
-              <p className="font-bold text-sm text-on-surface mt-0.5">
-                {hasBalance
-                  ? `${lpBalanceHuman.toFixed(4)} ${underlyingSymbol}`
-                  : `$${balanceUsd.toLocaleString()}`
-                }
+          {/* Not redeemable — full block */}
+          {!withdrawalEnabled && (
+            <div className="text-center space-y-4 py-6">
+              <div className="w-16 h-16 bg-error/10 rounded-full flex items-center justify-center mx-auto">
+                <span className="material-symbols-outlined text-error text-3xl">block</span>
+              </div>
+              <h3 className="font-headline font-extrabold text-xl text-on-surface">Withdrawal Not Supported</h3>
+              <p className="text-sm text-on-surface-variant leading-relaxed">
+                This vault does not support withdrawals via Composer. You'll need to withdraw directly through the{' '}
+                <span className="font-bold text-on-surface">{vault?.protocol?.name ?? 'protocol'}</span> interface.
               </p>
+              {vault?.protocol?.url && (
+                <a
+                  href={vault.protocol.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-6 py-3 bg-primary-container text-white rounded-xl font-bold text-sm hover:opacity-90 transition-all"
+                >
+                  <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                  Go to {vault?.protocol?.name ?? 'Protocol'}
+                </a>
+              )}
+              <button onClick={onClose}
+                className="block w-full py-3 rounded-xl text-sm font-bold text-on-surface-variant border border-surface-container-high hover:bg-surface-container transition-all">
+                Close
+              </button>
             </div>
-            {balanceUsd > 0 && (
-              <p className="text-sm text-on-surface-variant font-medium">${balanceUsd.toLocaleString()}</p>
-            )}
-          </div>
+          )}
 
-          {/* Destination mode */}
-          {txStep === 'idle' && (
-            <div className="space-y-3">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant block">
-                Receive funds to
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleDestModeChange('same')}
-                  className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
-                    destMode === 'same'
-                      ? 'bg-primary-container text-white border-primary-container'
-                      : 'border-surface-container-high text-on-surface-variant hover:border-primary-container'
-                  }`}
-                >
-                  Same Token
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDestModeChange('custom')}
-                  className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 flex items-center justify-center gap-1 ${
-                    destMode === 'custom'
-                      ? 'bg-on-tertiary-container text-white border-on-tertiary-container'
-                      : 'border-surface-container-high text-on-surface-variant hover:border-on-tertiary-container'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[13px]">bolt</span>
-                  Any Chain
-                </button>
+          {withdrawalEnabled && (
+            <>
+              {/* Vault summary */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-surface-container rounded-xl p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">APY</p>
+                  <p className="font-headline font-black text-base text-on-tertiary-container">{apyDisplay}</p>
+                </div>
+                <div className="bg-surface-container rounded-xl p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">30D APY</p>
+                  <p className="font-headline font-black text-base text-on-surface">{apy30dDisplay}</p>
+                </div>
+                <div className="bg-surface-container rounded-xl p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">Network</p>
+                  <p className="font-bold text-sm text-on-surface truncate">{getChainName(vaultChainId)}</p>
+                </div>
               </div>
 
-              {destMode === 'same' && destToken && (
-                <div className="flex items-center gap-3 p-3 bg-surface-container rounded-xl">
-                  <div className="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center text-sm font-black text-on-surface-variant shrink-0">
-                    {destToken.symbol?.[0] ?? '?'}
+              {/* Position balance */}
+              <div className="flex items-center justify-between p-3 bg-surface-container rounded-xl">
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Your Position</p>
+                  <p className="font-bold text-sm text-on-surface mt-0.5">
+                    {hasBalance
+                      ? `${lpBalanceHuman.toFixed(4)} ${underlyingSymbol}`
+                      : `$${balanceUsd.toLocaleString()}`
+                    }
+                  </p>
+                </div>
+                {balanceUsd > 0 && (
+                  <p className="text-sm text-on-surface-variant font-medium">${balanceUsd.toLocaleString()}</p>
+                )}
+              </div>
+
+              {/* Destination mode */}
+              {txStep === 'idle' && (
+                <div className="space-y-3">
+                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant block">
+                    Receive funds to
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDestModeChange('same')}
+                      className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
+                        destMode === 'same'
+                          ? 'bg-primary-container text-white border-primary-container'
+                          : 'border-surface-container-high text-on-surface-variant hover:border-primary-container'
+                      }`}
+                    >
+                      Same Token
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDestModeChange('custom')}
+                      className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 flex items-center justify-center gap-1 ${
+                        destMode === 'custom'
+                          ? 'bg-on-tertiary-container text-white border-on-tertiary-container'
+                          : 'border-surface-container-high text-on-surface-variant hover:border-on-tertiary-container'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[13px]">bolt</span>
+                      Any Chain
+                    </button>
                   </div>
-                  <div className="flex-1">
-                    <p className="font-bold text-sm text-on-surface">Receive {destToken.symbol}</p>
-                    <p className="text-xs text-on-surface-variant">{getChainName(vaultChainId)}</p>
-                  </div>
-                  <span className="material-symbols-outlined text-on-tertiary-container text-[18px]">check_circle</span>
+
+                  {destMode === 'same' && destToken && (
+                    <div className="flex items-center gap-3 p-3 bg-surface-container rounded-xl">
+                      <div className="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center text-sm font-black text-on-surface-variant shrink-0">
+                        {destToken.symbol?.[0] ?? '?'}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-sm text-on-surface">Receive {destToken.symbol}</p>
+                        <p className="text-xs text-on-surface-variant">{getChainName(vaultChainId)}</p>
+                      </div>
+                      <span className="material-symbols-outlined text-on-tertiary-container text-[18px]">check_circle</span>
+                    </div>
+                  )}
+
+                  {destMode === 'custom' && (
+                    <div className="space-y-2 p-3 bg-on-tertiary-container/5 border border-on-tertiary-container/20 rounded-xl">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="material-symbols-outlined text-on-tertiary-container text-[14px]">bolt</span>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-on-tertiary-container">
+                          Composer — withdraw to any chain
+                        </p>
+                      </div>
+                      <ChainPicker value={destChainId} onChange={handleDestChainChange} label="Receive on chain" />
+                      <DestTokenPicker
+                        destChainId={destChainId}
+                        selectedToken={destToken}
+                        onTokenSelect={setDestToken}
+                        walletAddress={address}
+                      />
+                      {isCrossChainWithdraw && (
+                        <p className="text-[10px] text-on-tertiary-container font-medium mt-1">
+                          ⚡ Composer bridges {getChainName(vaultChainId)} → {getChainName(destChainId)} automatically.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {destMode === 'custom' && (
-                <div className="space-y-2 p-3 bg-on-tertiary-container/5 border border-on-tertiary-container/20 rounded-xl">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="material-symbols-outlined text-on-tertiary-container text-[14px]">bolt</span>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-on-tertiary-container">
-                      Composer — withdraw to any chain
-                    </p>
+              {/* Withdraw type */}
+              {txStep === 'idle' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWithdrawType('partial')}
+                    className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
+                      withdrawType === 'partial'
+                        ? 'bg-primary-container text-white border-primary-container'
+                        : 'border-surface-container-high text-on-surface-variant hover:border-primary-container'
+                    }`}
+                  >
+                    Partial
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWithdrawType('full')}
+                    className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
+                      withdrawType === 'full'
+                        ? 'bg-error text-white border-error'
+                        : 'border-surface-container-high text-on-surface-variant hover:border-error'
+                    }`}
+                  >
+                    Withdraw All
+                  </button>
+                </div>
+              )}
+
+              {/* Partial amount */}
+              {txStep === 'idle' && withdrawType === 'partial' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                      Amount ({underlyingSymbol})
+                    </label>
+                    {hasBalance && (
+                      <span className="text-xs font-medium text-on-surface-variant">
+                        Balance: <span className="text-on-tertiary-container font-bold">{lpBalanceHuman.toFixed(4)}</span> {underlyingSymbol}
+                      </span>
+                    )}
                   </div>
-                  <ChainPicker value={destChainId} onChange={handleDestChainChange} label="Receive on chain" />
-                  <DestTokenPicker
-                    destChainId={destChainId}
-                    selectedToken={destToken}
-                    onTokenSelect={setDestToken}
-                    walletAddress={address}
-                  />
-                  {isCrossChainWithdraw && (
-                    <p className="text-[10px] text-on-tertiary-container font-medium mt-1">
-                      ⚡ Composer bridges {getChainName(vaultChainId)} → {getChainName(destChainId)} automatically.
+
+                  <div className={`relative flex items-center border-2 rounded-xl transition-all ${
+                    amount && !isBusy
+                      ? 'border-on-tertiary-container/50 bg-surface-container-low'
+                      : 'border-surface-container-high bg-surface-container-low hover:border-primary-container/40'
+                  }`}>
+                    <input
+                      ref={inputRef}
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={amount}
+                      onChange={e => { setError(null); setAmount(e.target.value) }}
+                      placeholder="0.00"
+                      disabled={isBusy}
+                      className="flex-1 px-4 py-3.5 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50"
+                    />
+                    {hasBalance && (
+                      <div className="flex items-center gap-1 pr-3">
+                        <button onClick={setHalf} disabled={isBusy}
+                          className="px-2 py-1 text-[10px] font-black uppercase text-on-surface-variant bg-surface-container rounded-lg hover:bg-surface-container-high transition-colors disabled:opacity-40">
+                          50%
+                        </button>
+                        <button onClick={setMax} disabled={isBusy}
+                          className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-error bg-error/10 rounded-lg hover:bg-error/20 transition-colors disabled:opacity-40">
+                          MAX
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {!hasBalance && (
+                    <p className="text-[11px] text-on-surface-variant font-medium px-1">
+                      Enter the amount of {underlyingSymbol} you'd like to withdraw.
                     </p>
                   )}
                 </div>
               )}
-            </div>
-          )}
 
-          {/* Withdraw type */}
-          {txStep === 'idle' && (
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setWithdrawType('partial')}
-                className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
-                  withdrawType === 'partial'
-                    ? 'bg-primary-container text-white border-primary-container'
-                    : 'border-surface-container-high text-on-surface-variant hover:border-primary-container'
-                }`}
-              >
-                Partial
-              </button>
-              <button
-                type="button"
-                onClick={() => setWithdrawType('full')}
-                className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
-                  withdrawType === 'full'
-                    ? 'bg-error text-white border-error'
-                    : 'border-surface-container-high text-on-surface-variant hover:border-error'
-                }`}
-              >
-                Withdraw All
-              </button>
-            </div>
-          )}
+              {/* Full withdraw summary */}
+              {txStep === 'idle' && withdrawType === 'full' && (
+                <div className="p-4 bg-error/5 border border-error/20 rounded-xl">
+                  <p className="font-bold text-sm text-on-surface">Withdraw everything</p>
+                  <p className="text-xs text-on-surface-variant mt-1">
+                    {hasBalance
+                      ? `${lpBalanceHuman.toFixed(4)} ${underlyingSymbol} ($${balanceUsd.toLocaleString()})`
+                      : `$${balanceUsd.toLocaleString()}`
+                    }
+                    {destMode === 'custom' && destToken
+                      ? ` → ${destToken.symbol} on ${getChainName(destChainId)}`
+                      : ` → ${underlyingSymbol} on ${getChainName(vaultChainId)}`
+                    }
+                  </p>
+                  {!hasBalance && (
+                    <p className="text-[11px] text-amber-600 font-medium mt-2">
+                      ⚠ Balance data may be unavailable. The withdrawal will attempt to use your on-chain balance.
+                    </p>
+                  )}
+                </div>
+              )}
 
-          {/* Partial amount input */}
-          {txStep === 'idle' && withdrawType === 'partial' && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-                  Amount ({underlyingSymbol})
-                </label>
-                {hasBalance && (
-                  <span className="text-xs font-medium text-on-surface-variant">
-                    Balance: <span className="text-on-tertiary-container font-bold">{lpBalanceHuman.toFixed(4)}</span> {underlyingSymbol}
-                  </span>
-                )}
-              </div>
+              {/* Error */}
+              {error && txStep === 'idle' && (
+                <div className="flex items-start gap-2 p-3 bg-error-container/20 border border-error-container rounded-xl">
+                  <span className="material-symbols-outlined text-error text-[16px] shrink-0 mt-0.5">error</span>
+                  <p className="text-xs font-medium text-on-error-container">{error}</p>
+                </div>
+              )}
 
-              {/* Input is NEVER disabled - user can always type */}
-              <div className={`relative flex items-center border-2 rounded-xl transition-all ${
-                amount && !isBusy
-                  ? 'border-on-tertiary-container/50 bg-surface-container-low'
-                  : 'border-surface-container-high bg-surface-container-low hover:border-primary-container/40'
-              }`}>
-                <input
-                  ref={inputRef}
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={amount}
-                  onChange={e => { setError(null); setAmount(e.target.value) }}
-                  placeholder="0.00"
-                  disabled={isBusy}
-                  className="flex-1 px-4 py-3.5 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50"
-                />
-                {hasBalance && (
-                  <div className="flex items-center gap-1 pr-3">
-                    <button onClick={setHalf} disabled={isBusy}
-                      className="px-2 py-1 text-[10px] font-black uppercase text-on-surface-variant bg-surface-container rounded-lg hover:bg-surface-container-high transition-colors disabled:opacity-40">
-                      50%
-                    </button>
-                    <button onClick={setMax} disabled={isBusy}
-                      className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-error bg-error/10 rounded-lg hover:bg-error/20 transition-colors disabled:opacity-40">
-                      MAX
-                    </button>
+              {/* Busy steps */}
+              {isBusy && (
+                <div className="space-y-2">
+                  {needsChainSwitch && <StepIndicator label={`Switch to ${getChainName(vaultChainId)}`} status={txStep === 'switching' ? 'active' : 'done'} />}
+                  <StepIndicator label="Approve Vault Shares" status={txStep === 'withdrawing' ? 'active' : 'pending'} />
+                  <StepIndicator label="Submit Withdrawal" status={txStep === 'withdrawing' ? 'active' : 'pending'} />
+                </div>
+              )}
+
+              {/* Done */}
+              {txStep === 'done' && (
+                <div className="text-center space-y-3 py-4">
+                  <div className="w-16 h-16 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
+                    <span className="material-symbols-outlined text-on-tertiary-container text-3xl">check_circle</span>
                   </div>
-                )}
-              </div>
-
-              {!hasBalance && (
-                <p className="text-[11px] text-on-surface-variant font-medium px-1">
-                  Enter the amount of {underlyingSymbol} you'd like to withdraw.
-                </p>
+                  <h3 className="font-headline font-extrabold text-xl text-on-surface">Withdrawal Complete!</h3>
+                  <p className="text-sm text-on-surface-variant">
+                    Funds sent to {getChainName(destChainId)} as {destToken?.symbol}.
+                    {isCrossChainWithdraw && ' Bridge may take 1–5 minutes.'}
+                  </p>
+                </div>
               )}
-            </div>
-          )}
 
-          {/* Full withdraw summary */}
-          {txStep === 'idle' && withdrawType === 'full' && (
-            <div className="p-4 bg-error/5 border border-error/20 rounded-xl">
-              <p className="font-bold text-sm text-on-surface">Withdraw everything</p>
-              <p className="text-xs text-on-surface-variant mt-1">
-                {hasBalance
-                  ? `${lpBalanceHuman.toFixed(4)} ${underlyingSymbol} ($${balanceUsd.toLocaleString()})`
-                  : `$${balanceUsd.toLocaleString()}`
-                }
-                {destMode === 'custom' && destToken
-                  ? ` → ${destToken.symbol} on ${getChainName(destChainId)}`
-                  : ` → ${underlyingSymbol} on ${getChainName(vaultChainId)}`
-                }
-              </p>
-              {!hasBalance && (
-                <p className="text-[11px] text-amber-600 font-medium mt-2">
-                  ⚠ Balance data may be unavailable. The withdrawal will attempt to use your on-chain balance.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Error */}
-          {error && txStep === 'idle' && (
-            <div className="flex items-start gap-2 p-3 bg-error-container/20 border border-error-container rounded-xl">
-              <span className="material-symbols-outlined text-error text-[16px] shrink-0 mt-0.5">error</span>
-              <p className="text-xs font-medium text-on-error-container">{error}</p>
-            </div>
-          )}
-
-          {/* Busy steps */}
-          {isBusy && (
-            <div className="space-y-2">
-              {needsChainSwitch && <StepIndicator label={`Switch to ${getChainName(vaultChainId)}`} status={txStep === 'switching' ? 'active' : 'done'} />}
-              <StepIndicator label="Approve Vault Shares" status={txStep === 'withdrawing' ? 'active' : 'pending'} />
-              <StepIndicator label="Submit Withdrawal" status={txStep === 'withdrawing' ? 'active' : 'pending'} />
-            </div>
-          )}
-
-          {/* Done */}
-          {txStep === 'done' && (
-            <div className="text-center space-y-3 py-4">
-              <div className="w-16 h-16 bg-on-tertiary-container/10 rounded-full flex items-center justify-center mx-auto">
-                <span className="material-symbols-outlined text-on-tertiary-container text-3xl">check_circle</span>
-              </div>
-              <h3 className="font-headline font-extrabold text-xl text-on-surface">Withdrawal Complete!</h3>
-              <p className="text-sm text-on-surface-variant">
-                Funds sent to {getChainName(destChainId)} as {destToken?.symbol}.
-                {isCrossChainWithdraw && ' Bridge may take 1–5 minutes.'}
-              </p>
-            </div>
-          )}
-
-          {/* Action button */}
-          {txStep !== 'done' ? (
-            <button
-              onClick={handleWithdraw}
-              disabled={!isValid || isBusy || !destToken}
-              className={`w-full py-4 rounded-2xl font-headline font-black text-base transition-all flex items-center justify-center gap-2
-                ${isValid && !isBusy && destToken
-                  ? withdrawType === 'full'
-                    ? 'bg-error text-white hover:opacity-90 shadow-md'
-                    : 'bg-primary-container text-white hover:opacity-90 shadow-md'
-                  : 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                }`}
-            >
-              {isBusy ? (
-                <>
-                  <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
-                  {txStep === 'switching' && 'Switching Network...'}
-                  {txStep === 'withdrawing' && 'Withdrawing...'}
-                </>
-              ) : needsChainSwitch && isValid ? (
-                <>
-                  <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
-                  Switch & Withdraw
-                </>
-              ) : withdrawType === 'full' ? (
-                <>
-                  <span className="material-symbols-outlined text-[18px]">logout</span>
-                  Withdraw All{destMode === 'custom' && destToken ? ` → ${destToken.symbol} on ${getChainName(destChainId)}` : ''}
-                </>
+              {/* Action button */}
+              {txStep !== 'done' ? (
+                <button
+                  onClick={handleWithdraw}
+                  disabled={!isValid || isBusy || !destToken}
+                  className={`w-full py-4 rounded-2xl font-headline font-black text-base transition-all flex items-center justify-center gap-2
+                    ${isValid && !isBusy && destToken
+                      ? withdrawType === 'full'
+                        ? 'bg-error text-white hover:opacity-90 shadow-md'
+                        : 'bg-primary-container text-white hover:opacity-90 shadow-md'
+                      : 'bg-surface-container text-on-surface-variant cursor-not-allowed'
+                    }`}
+                >
+                  {isBusy ? (
+                    <>
+                      <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+                      {txStep === 'switching' && 'Switching Network...'}
+                      {txStep === 'withdrawing' && 'Withdrawing...'}
+                    </>
+                  ) : needsChainSwitch && isValid ? (
+                    <>
+                      <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
+                      Switch & Withdraw
+                    </>
+                  ) : withdrawType === 'full' ? (
+                    <>
+                      <span className="material-symbols-outlined text-[18px]">logout</span>
+                      Withdraw All{destMode === 'custom' && destToken ? ` → ${destToken.symbol} on ${getChainName(destChainId)}` : ''}
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[18px]">remove_circle</span>
+                      {amount ? `Withdraw ${amount} ${underlyingSymbol}` : 'Enter an amount'}
+                      {destMode === 'custom' && destToken ? ` → ${destToken.symbol}` : ''}
+                    </>
+                  )}
+                </button>
               ) : (
-                <>
-                  <span className="material-symbols-outlined text-[18px]">remove_circle</span>
-                  {amount ? `Withdraw ${amount} ${underlyingSymbol}` : 'Enter an amount'}
-                  {destMode === 'custom' && destToken ? ` → ${destToken.symbol}` : ''}
-                </>
+                <button onClick={onClose}
+                  className="w-full py-4 rounded-2xl font-headline font-black text-base bg-on-tertiary-container text-white hover:opacity-90 transition-all">
+                  Done
+                </button>
               )}
-            </button>
-          ) : (
-            <button onClick={onClose}
-              className="w-full py-4 rounded-2xl font-headline font-black text-base bg-on-tertiary-container text-white hover:opacity-90 transition-all">
-              Done
-            </button>
+            </>
           )}
         </div>
       </div>

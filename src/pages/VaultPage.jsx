@@ -1,4 +1,6 @@
 // src/pages/VaultPage.jsx
+// Changes: isTransactional and isRedeemable badges in vault table rows
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
@@ -58,9 +60,7 @@ export default function VaultPage() {
   const [chainsLoading, setChainsLoading] = useState(true)
   const [error, setError] = useState(null)
   const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
-
-  // Modal state — replaces the old inline handleDeposit + alert flow
-  const [depositModal, setDepositModal] = useState(null) // vault object or null
+  const [depositModal, setDepositModal] = useState(null)
 
   useEffect(() => {
     setChainsLoading(true)
@@ -99,7 +99,6 @@ export default function VaultPage() {
     loadVaultsForChain(selectedChain)
   }, [selectedChain, loadVaultsForChain])
 
-  // Update cache countdown
   useEffect(() => {
     if (!selectedChain) return
     const interval = setInterval(() => {
@@ -161,6 +160,20 @@ export default function VaultPage() {
         </div>
       )}
 
+      {/* Legend */}
+      <div className="mb-4 flex items-center gap-4 flex-wrap">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Legend:</span>
+        <span className="flex items-center gap-1 text-[10px] font-bold text-on-tertiary-container bg-on-tertiary-container/10 px-2 py-1 rounded-full">
+          <span className="material-symbols-outlined text-[11px]">bolt</span> Composable — cross-chain deposits
+        </span>
+        <span className="flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-1 rounded-full">
+          🔒 Same-chain only
+        </span>
+        <span className="flex items-center gap-1 text-[10px] font-bold text-error bg-error/10 px-2 py-1 rounded-full">
+          ⚠ Not redeemable via Composer
+        </span>
+      </div>
+
       {error && (
         <div className="mb-6 p-4 bg-error-container/30 border border-error-container rounded-xl text-on-error-container text-sm font-medium">
           <strong>Error:</strong> {error}
@@ -213,7 +226,6 @@ export default function VaultPage() {
         </div>
       )}
 
-      {/* Deposit Modal — full Composer integration */}
       {depositModal && (
         <DepositModal
           vault={depositModal}
@@ -237,17 +249,34 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
     : `$${(Number(vault.analytics.tvl.usd) / 1000).toFixed(0)}K`
 
   const rankScore = computeVaultRankScore(vault)
+  const isComposable = vault.isTransactional !== false
+  const isRedeemable = vault.isRedeemable !== false
 
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow overflow-hidden border border-surface-container">
       <div className="grid grid-cols-12 gap-0">
-        {/* Left: vault info */}
         <div className={`${impact ? 'col-span-12 lg:col-span-8' : 'col-span-12'} p-8 space-y-6`}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="material-symbols-outlined text-on-tertiary-container text-lg">verified</span>
             <span className="text-xs font-black uppercase tracking-widest text-on-tertiary-container">
               Doctor's Choice — {chainName}
             </span>
+            {/* Composer badges */}
+            {isComposable && (
+              <span className="flex items-center gap-1 text-[10px] font-black bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-0.5 rounded-full">
+                <span className="material-symbols-outlined text-[11px]">bolt</span>Cross-chain deposits
+              </span>
+            )}
+            {!isComposable && (
+              <span className="flex items-center gap-1 text-[10px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                🔒 Same-chain only
+              </span>
+            )}
+            {!isRedeemable && (
+              <span className="flex items-center gap-1 text-[10px] font-black bg-error/10 text-error px-2 py-0.5 rounded-full">
+                ⚠ Not redeemable
+              </span>
+            )}
           </div>
 
           <div>
@@ -304,7 +333,6 @@ function DoctorsChoiceCard({ vault, impact, onDeposit, chainName }) {
           )}
         </div>
 
-        {/* Right: Upgrade Impact — only shown when doctor's pick beats the median */}
         {impact && (
           <div className="col-span-12 lg:col-span-4 bg-primary-container p-8 flex flex-col justify-between">
             <div className="space-y-4">
@@ -404,10 +432,27 @@ function VaultTable({
             ? ((Number(apy) / 100) - medianApy)
             : null
 
+          // isTransactional: true = cross-chain deposits via Composer supported
+          // isTransactional: false = same-chain only
+          // isTransactional: undefined = unknown (treat as true for backwards compat)
+          const isComposable = vault.isTransactional !== false
+          const isRedeemable = vault.isRedeemable !== false
+          const isStablecoin = vault.tags?.includes('stablecoin')
+
           const badges = []
           if (isBestMatch) badges.push({ label: "Doctor's Pick", color: 'bg-on-tertiary-container text-white' })
           if (isHighLiquidity && !isBestMatch) badges.push({ label: 'High Liquidity', color: 'bg-secondary-container text-on-secondary-container' })
-          if (vault.tags?.includes('stablecoin')) badges.push({ label: 'Stablecoin', color: 'bg-surface-container text-on-surface-variant' })
+          if (isStablecoin) badges.push({ label: 'Stablecoin', color: 'bg-surface-container text-on-surface-variant' })
+          // Composer capability badges
+          if (vault.isTransactional === true && !isBestMatch) {
+            badges.push({ label: '⚡ Composable', color: 'bg-on-tertiary-container/10 text-on-tertiary-container' })
+          }
+          if (vault.isTransactional === false) {
+            badges.push({ label: '🔒 Same-chain', color: 'bg-amber-100 text-amber-700' })
+          }
+          if (vault.isRedeemable === false) {
+            badges.push({ label: '⚠ Not redeemable', color: 'bg-error/10 text-error' })
+          }
 
           return (
             <div
@@ -470,7 +515,7 @@ function VaultTable({
                 </p>
               </div>
 
-              {/* Deposit only — no Withdraw */}
+              {/* Deposit button — always shown, modal handles the restriction internally */}
               <div className="col-span-2 flex justify-end">
                 <button
                   onClick={() => onDeposit(vault)}
