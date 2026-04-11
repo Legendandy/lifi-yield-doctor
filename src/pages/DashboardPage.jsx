@@ -219,32 +219,24 @@ function NoPositionsState({ onGoToVaults }) {
 }
 
 function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
-  // After enrichment in earnApi.js, position now has:
-  // - position.apy (from vault analytics)
-  // - position.apy30d
-  // - position.vaultName
-  // - position.protocolName
-  // - position.vaultAddress (= position.asset.address = vault LP token)
-  // - position.underlyingTokens
-  // - position.balanceNative (raw LP token string)
-  // - position.balanceUsd
-  // - position._vaultData (full vault object)
-
   const currentApy = position.apy
   const tag = getHealthTag(currentApy, bestApy)
   const apyDisplay = currentApy != null ? `${(currentApy * 100).toFixed(2)}%` : 'N/A'
   const chainName = getChainName(position.chainId)
   const protocolName = position.protocolName ?? 'Unknown'
   const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
-
-  // Build vault object for modals
-  // Use _vaultData if available (most accurate), otherwise synthesize
+ 
+  // CRITICAL: always use _vaultData from earnApi enrichment.
+  // _vaultData comes from GET /v1/earn/vaults/:chainId/:address and includes lpTokens.
+  // A synthesized object has no lpTokens, which breaks withdrawal LP token resolution.
   const vaultForModal = position._vaultData ?? {
     name: vaultName,
     protocol: { name: protocolName },
     network: chainName,
     chainId: position.chainId,
     address: position.vaultAddress ?? position.asset?.address ?? '',
+    // lpTokens deliberately omitted from fallback — resolveWithdrawFromToken will
+    // then fall back to position.asset.address and check it against underlyingTokens
     analytics: {
       apy: { total: currentApy },
       apy30d: position.apy30d ?? null,
@@ -252,7 +244,7 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
     },
     underlyingTokens: position.underlyingTokens ?? (position.asset ? [position.asset] : []),
   }
-
+ 
   return (
     <div className="bg-surface-container-lowest p-6 rounded-xl clinical-shadow hover:bg-surface-container-low transition-colors">
       <div className="flex justify-between items-start mb-4">
@@ -270,8 +262,7 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
           <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">Current APY</span>
         </div>
       </div>
-
-      {/* APY breakdown if available */}
+ 
       {position.apy30d != null && (
         <div className="flex gap-4 mb-4 p-3 bg-surface-container rounded-xl">
           <div className="flex-1 text-center">
@@ -294,20 +285,18 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
           </div>
         </div>
       )}
-
+ 
       <div className="grid grid-cols-2 gap-6 mb-4">
         <div>
           <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Balance</span>
-          <span className="text-lg font-bold text-on-surface">
-            ${Number(position.balanceUsd || 0).toLocaleString()}
-          </span>
+          <span className="text-lg font-bold text-on-surface">${Number(position.balanceUsd || 0).toLocaleString()}</span>
         </div>
         <div>
           <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Health</span>
           <span className="text-sm font-bold" style={{ color: tag.color }}>{tag.label}</span>
         </div>
       </div>
-
+ 
       <div className="flex gap-2 pt-2 border-t border-surface-container">
         <button
           onClick={() => onDeposit(vaultForModal)}
