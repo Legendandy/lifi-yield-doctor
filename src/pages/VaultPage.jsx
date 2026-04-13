@@ -37,14 +37,99 @@ function formatTimeRemaining(ms) {
   return `${secs}s`
 }
 
+// ─── Tooltip ──────────────────────────────────────────────────────────────────
+// Root is `inline-block` so it hugs the badge exactly — no gap between the
+// badge edge and the hover zone. The tooltip bubble sits above (or below) in
+// a z-[600] absolutely-positioned span so it never clips content beneath it.
+function Tooltip({ text, children, position = 'top' }) {
+  const posMap = {
+    top:    'bottom-full left-1/2 -translate-x-1/2 mb-1.5',
+    bottom: 'top-full left-1/2 -translate-x-1/2 mt-1.5',
+    left:   'right-full top-1/2 -translate-y-1/2 mr-1.5',
+    right:  'left-full top-1/2 -translate-y-1/2 ml-1.5',
+  }
+  return (
+    <span className="relative inline-block group/tip">
+      {children}
+      <span
+        className={`pointer-events-none absolute ${posMap[position]} z-[600]
+          opacity-0 group-hover/tip:opacity-100 transition-opacity duration-150`}
+      >
+        <span className="block bg-[#131b2e] text-white text-[10px] font-semibold
+          px-2.5 py-1.5 rounded-lg shadow-xl leading-snug max-w-[200px] whitespace-normal text-center">
+          {text}
+        </span>
+      </span>
+    </span>
+  )
+}
+
+// ─── Badge ────────────────────────────────────────────────────────────────────
+// Always inline-block so Tooltip wraps it at exactly the right width.
+// Padding / colours are passed via className — keep it simple.
+function Badge({ children, className = '' }) {
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold leading-tight ${className}`}>
+      {children}
+    </span>
+  )
+}
+
+// ─── APY Info Modal ───────────────────────────────────────────────────────────
+function AppInfoModal({ onClose }) {
+  return (
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-headline font-extrabold text-lg text-on-surface">APY Prediction Probability</h3>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors"
+          >
+            <span className="material-symbols-outlined text-[14px] text-on-surface-variant">close</span>
+          </button>
+        </div>
+        <div className="space-y-3 text-sm text-on-surface-variant leading-relaxed">
+          <p>
+            <span className="font-bold text-on-surface">APP (APY Prediction Probability)</span> is a model
+            estimate from DeFiLlama that predicts the likely direction of a vault's APY over the near term.
+          </p>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 p-2 bg-surface-container rounded-lg">
+              <span className="font-black text-base" style={{ color: '#009844' }}>↑</span>
+              <span><span className="font-bold text-on-surface">Up</span> — Model predicts APY is likely to increase</span>
+            </div>
+            <div className="flex items-center gap-2 p-2 bg-surface-container rounded-lg">
+              <span className="font-black text-base" style={{ color: '#ba1a1a' }}>↓</span>
+              <span><span className="font-bold text-on-surface">Down</span> — Model predicts APY is likely to decrease</span>
+            </div>
+            <div className="flex items-center gap-2 p-2 bg-surface-container rounded-lg">
+              <span className="font-black text-base" style={{ color: '#76777d' }}>→</span>
+              <span><span className="font-bold text-on-surface">Stable</span> — Model predicts APY is likely to remain flat</span>
+            </div>
+          </div>
+          <p>
+            The percentage shown (e.g. <span className="font-bold text-on-surface">72%</span>) is the model's
+            confidence in that direction. Higher confidence means a stronger signal.
+          </p>
+          <p className="text-[11px] text-outline bg-surface-container p-2 rounded-lg">
+            This is a probabilistic model estimate, not a guarantee. Always do your own research.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Risk Badge ───────────────────────────────────────────────────────────────
 function RiskBadge({ riskData, size = 'sm' }) {
   if (!riskData) {
     return (
-      <span className={`inline-flex items-center justify-center font-black rounded-lg border
-        ${size === 'lg' ? 'w-10 h-10 text-base' : 'w-7 h-7 text-xs'}
-        bg-surface-container border-surface-container-high text-on-surface-variant`}
-        title="No DeFiLlama match found for this vault"
+      <span
+        className={`inline-flex items-center justify-center font-black rounded-lg border
+          ${size === 'lg' ? 'w-10 h-10 text-base' : 'w-7 h-7 text-xs'}
+          bg-surface-container border-surface-container-high text-on-surface-variant`}
       >
         —
       </span>
@@ -52,7 +137,6 @@ function RiskBadge({ riskData, size = 'sm' }) {
   }
   const { grade, score, breakdown, sigma, mu, isOutlier, ilRisk } = riskData
   const cfg = GRADE_CONFIG[grade]
-
   const tip = [
     `Risk Grade ${grade} · ${score}/100`,
     `Volatility (σ): ${breakdown.sigmaScore}/40${sigma !== null ? ` (σ=${sigma.toFixed(3)})` : ''}`,
@@ -61,7 +145,6 @@ function RiskBadge({ riskData, size = 'sm' }) {
     `TVL depth: ${breakdown.tvlScore}/15`,
     `Flags: ${breakdown.flagScore}/5${isOutlier ? ' ⚠ outlier' : ''}${ilRisk === 'yes' ? ' ⚠ IL risk' : ''}`,
   ].join('\n')
-
   return (
     <span
       className={`inline-flex items-center justify-center font-black rounded-lg border cursor-default
@@ -79,32 +162,25 @@ function PredictionCell({ predictions }) {
   if (!predictions || predictions.predictedClass === null || predictions.predictedClass === undefined) {
     return <span className="text-on-surface-variant text-xs">—</span>
   }
-
   const { predictedClass, predictedProbability, binnedConfidence } = predictions
   const cls = (predictedClass ?? '').toLowerCase()
+  const pct = Math.round(Number(predictedProbability))
 
-  let arrow, color, bg, dirLabel
-  if (cls.includes('up')) {
-    arrow = '↑'; color = '#009844'; bg = 'rgba(0,152,68,0.10)'; dirLabel = 'Up'
-  } else if (cls.includes('down')) {
-    arrow = '↓'; color = '#ba1a1a'; bg = 'rgba(186,26,26,0.10)'; dirLabel = 'Down'
-  } else {
-    arrow = '→'; color = '#76777d'; bg = 'rgba(118,119,125,0.10)'; dirLabel = 'Stable'
-  }
+  let arrow, color, bg
+  if (cls.includes('up'))        { arrow = '↑'; color = '#009844'; bg = 'rgba(0,152,68,0.10)' }
+  else if (cls.includes('down')) { arrow = '↓'; color = '#ba1a1a'; bg = 'rgba(186,26,26,0.10)' }
+  else                           { arrow = '→'; color = '#76777d'; bg = 'rgba(118,119,125,0.10)' }
 
   const confLabel = { 1: 'Low conf.', 2: 'Med conf.', 3: 'High conf.' }[binnedConfidence] ?? ''
   const confColor = { 1: '#ea580c', 2: '#d97706', 3: '#009844' }[binnedConfidence] ?? '#76777d'
 
-  const tip = `APY Prediction: ${predictedClass} (${predictedProbability}% probability)\nConfidence: ${({ 1: 'Low', 2: 'Medium', 3: 'High' }[binnedConfidence] ?? 'Unknown')}`
-
   return (
-    <span className="inline-flex flex-col gap-0.5" title={tip}>
+    <span className="inline-flex flex-col gap-0.5">
       <span
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-black w-fit"
         style={{ color, background: bg }}
       >
-        {arrow} {predictedProbability}%
-        <span className="font-medium opacity-80">{dirLabel}</span>
+        {arrow} {pct}%
       </span>
       {binnedConfidence && (
         <span className="text-[10px] font-bold" style={{ color: confColor }}>{confLabel}</span>
@@ -115,10 +191,9 @@ function PredictionCell({ predictions }) {
 
 // ─── Doctor's Choice Card ─────────────────────────────────────────────────────
 function DoctorsChoiceCard({ vault, riskData, chainName, onDeposit }) {
-  const apy    = vault.analytics?.apy?.total
-  const apy30d = vault.analytics?.apy30d
-  const tvlRaw = Number(vault.analytics?.tvl?.usd ?? 0)
-
+  const apy          = vault.analytics?.apy?.total
+  const apy30d       = vault.analytics?.apy30d
+  const tvlRaw       = Number(vault.analytics?.tvl?.usd ?? 0)
   const isComposable = vault.isTransactional !== false
   const isRedeemable = vault.isRedeemable !== false
 
@@ -131,31 +206,34 @@ function DoctorsChoiceCard({ vault, riskData, chainName, onDeposit }) {
           <span className="text-xs font-black uppercase tracking-widest text-on-tertiary-container">
             Doctor's Choice — {chainName}
           </span>
-          {riskData && (
-            <span
-              className="flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full"
-              style={{ color: GRADE_CONFIG[riskData.grade].color, background: GRADE_CONFIG[riskData.grade].bg, border: `1px solid ${GRADE_CONFIG[riskData.grade].border}` }}
-            >
-              Grade {riskData.grade} · {riskData.score}/100
-            </span>
+         
+
+          {isComposable ? (
+            <Tooltip text="Deposits are supported via Composer" position="bottom">
+              <Badge className="bg-on-tertiary-container/10 text-on-tertiary-container font-black cursor-default">
+                ⚡ Cross-chain deposit
+              </Badge>
+            </Tooltip>
+          ) : (
+            <Tooltip text="Only same-chain deposits are supported for this vault" position="bottom">
+              <Badge className="bg-amber-100 text-amber-700 font-black cursor-default">
+                🔒 Same-chain only
+              </Badge>
+            </Tooltip>
           )}
-          {isComposable && (
-            <span className="flex items-center gap-1 text-[10px] font-black bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-0.5 rounded-full">
-              <span className="material-symbols-outlined text-[11px]">bolt</span>Cross-chain deposit
-            </span>
-          )}
-          {!isComposable && (
-            <span className="flex items-center gap-1 text-[10px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-              🔒 Same-chain only
-            </span>
-          )}
-          {!isRedeemable && (
-            <span
-              className="flex items-center gap-1 text-[10px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full"
-              title="Withdrawal not supported via LiFi Composer. Use protocol UI."
-            >
-              ⚠ Not via Composer
-            </span>
+
+          {isRedeemable ? (
+            <Tooltip text="Withdrawals are supported via Composer" position="bottom">
+              <Badge className="bg-emerald-100 text-emerald-700 font-black cursor-default">
+                ✓ Redeemable
+              </Badge>
+            </Tooltip>
+          ) : (
+            <Tooltip text="Withdrawals are not supported via Composer" position="bottom">
+              <Badge className="bg-amber-100 text-amber-700 font-black cursor-default">
+                ⚠ Not Redeemable
+              </Badge>
+            </Tooltip>
           )}
         </div>
 
@@ -191,10 +269,14 @@ function DoctorsChoiceCard({ vault, riskData, chainName, onDeposit }) {
 
         <div className="flex items-center gap-3 flex-wrap">
           {vault.underlyingTokens?.length > 0 && vault.underlyingTokens.map((t, i) => (
-            <span key={i} className="px-3 py-1 bg-secondary-container text-on-secondary-container rounded-full text-xs font-bold">{t.symbol}</span>
+            <span key={i} className="px-3 py-1 bg-secondary-container text-on-secondary-container rounded-full text-xs font-bold">
+              {t.symbol}
+            </span>
           ))}
           {vault.tags?.includes('stablecoin') && (
-            <span className="px-2 py-0.5 bg-surface-container text-on-surface-variant rounded-full text-[10px] font-bold">Stablecoin</span>
+            <span className="px-2 py-0.5 bg-surface-container text-on-surface-variant rounded-full text-[10px] font-bold">
+              Stablecoin
+            </span>
           )}
         </div>
 
@@ -215,8 +297,6 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
 
   return (
     <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-surface-container-lowest rounded-2xl border border-surface-container clinical-shadow">
-
-      {/* Protocol */}
       <div className="flex items-center gap-2">
         <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Protocol</label>
         <select
@@ -229,23 +309,18 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
         </select>
       </div>
 
-      {/* APY — user-typed min/max */}
       <div className="flex items-center gap-2">
         <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">APY</label>
         <div className="flex items-center gap-1">
           <input
-            type="number"
-            min="0"
-            placeholder="Min %"
+            type="number" min="0" placeholder="Min %"
             value={filters.apyMin}
             onChange={e => onFiltersChange({ ...filters, apyMin: e.target.value })}
             className="w-20 px-2 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
           />
           <span className="text-on-surface-variant text-xs font-bold">–</span>
           <input
-            type="number"
-            min="0"
-            placeholder="Max %"
+            type="number" min="0" placeholder="Max %"
             value={filters.apyMax}
             onChange={e => onFiltersChange({ ...filters, apyMax: e.target.value })}
             className="w-20 px-2 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
@@ -253,14 +328,10 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
         </div>
       </div>
 
-      {/* APY sort */}
       <div className="flex items-center gap-2">
         <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Sort</label>
         <div className="flex rounded-xl overflow-hidden border border-surface-container-high">
-          {[
-            { value: 'desc', label: '↓ APY' },
-            { value: 'asc',  label: '↑ APY' },
-          ].map(opt => (
+          {[{ value: 'desc', label: '↓ APY' }, { value: 'asc', label: '↑ APY' }].map(opt => (
             <button
               key={opt.value}
               onClick={() => onFiltersChange({ ...filters, apySort: opt.value })}
@@ -276,7 +347,6 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
         </div>
       </div>
 
-      {/* Min TVL */}
       <div className="flex items-center gap-2">
         <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Min TVL</label>
         <select
@@ -297,7 +367,6 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
         </select>
       </div>
 
-      {/* Risk grade */}
       <div className="flex items-center gap-2">
         <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Risk</label>
         <div className="flex gap-1">
@@ -324,7 +393,6 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
         </div>
       </div>
 
-      {/* Clear */}
       {(filters.protocol || filters.minTvl > 0 || filters.grade || filters.apyMin || filters.apyMax) && (
         <button
           onClick={() => onFiltersChange({ protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })}
@@ -338,33 +406,14 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
   )
 }
 
-// ─── Risk Legend ──────────────────────────────────────────────────────────────
-function RiskLegend() {
-  const items = [
-    ...Object.entries(GRADE_CONFIG).map(([g, cfg]) => ({ label: g, desc: cfg.desc, color: cfg.color, bg: cfg.bg, border: cfg.border })),
-    { label: '—', desc: 'No match', color: '#76777d', bg: 'rgba(118,119,125,0.08)', border: 'rgba(118,119,125,0.25)' },
-  ]
-  return (
-    <div className="flex flex-wrap gap-2 mb-5">
-      {items.map(item => (
-        <span
-          key={item.label}
-          className="flex items-center gap-1.5 px-3 py-1 rounded-xl border text-[11px] font-bold"
-          style={{ color: item.color, background: item.bg, borderColor: item.border }}
-        >
-          <span className="font-black">{item.label}</span>
-          <span className="text-on-surface-variant" style={{ color: 'inherit', opacity: 0.75 }}>{item.desc}</span>
-        </span>
-      ))}
-    </div>
-  )
-}
-
 // ─── Vault Table ──────────────────────────────────────────────────────────────
 function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDeposit, pageIndex, totalPages, totalVaults, onPageChange }) {
+  const [showAppInfo, setShowAppInfo] = useState(false)
 
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow">
+      {showAppInfo && <AppInfoModal onClose={() => setShowAppInfo(false)} />}
+
       {/* Header */}
       <div className="px-6 py-4 border-b border-surface-container flex justify-between items-center bg-surface-container-low rounded-t-2xl">
         <div>
@@ -377,31 +426,40 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
       </div>
 
       {/* Column headers */}
-      <div className="px-6 py-3 grid gap-3 border-b border-surface-container bg-surface-container-low/60 text-[10px] uppercase tracking-widest font-black text-on-surface-variant"
-        style={{ gridTemplateColumns: '32px 1fr 90px 90px 100px 110px 80px 90px' }}>
+      <div
+        className="px-6 py-3 grid gap-3 border-b border-surface-container bg-surface-container-low/60 text-[10px] uppercase tracking-widest font-black text-on-surface-variant"
+        style={{ gridTemplateColumns: '32px 1fr 90px 90px 100px 110px 100px 90px' }}
+      >
         <div className="text-center">#</div>
         <div>Vault / Protocol</div>
         <div className="text-right">Current APY</div>
         <div className="text-right">30d Avg</div>
         <div className="text-right">TVL</div>
-        <div className="text-center" title="APY Prediction Probability — model estimate of APY direction">APP (i)</div>
-        <div className="text-center">Risk</div>
+        <div className="flex items-center justify-center gap-1">
+          <span>APP</span>
+          <button
+            onClick={() => setShowAppInfo(true)}
+            className="w-4 h-4 rounded-full bg-surface-container-high border border-surface-container-highest text-on-surface-variant hover:bg-primary-container hover:text-white hover:border-primary-container transition-all flex items-center justify-center shrink-0"
+          >
+            <span className="text-[9px] font-black leading-none">i</span>
+          </button>
+        </div>
+        <div className="text-center">Risk Grade</div>
         <div className="text-right">Action</div>
       </div>
 
       {/* Rows */}
       <div className="divide-y divide-surface-container">
         {vaults.map((vault, i) => {
-          const key = vault.slug ?? vault.address
-          const riskData = riskMap?.get(key) ?? null
-          const llamaPool = llamaPoolMap?.get(key) ?? null
-          const predictions = llamaPool?.predictions ?? null
-          const isBest = vault.address === doctorsChoiceAddress
+          const key          = vault.slug ?? vault.address
+          const riskData     = riskMap?.get(key) ?? null
+          const llamaPool    = llamaPoolMap?.get(key) ?? null
+          const predictions  = llamaPool?.predictions ?? null
+          const isBest       = vault.address === doctorsChoiceAddress
 
-          const apy    = vault.analytics?.apy?.total
-          const apy30d = vault.analytics?.apy30d
-          const tvlRaw = Number(vault.analytics?.tvl?.usd ?? 0)
-
+          const apy          = vault.analytics?.apy?.total
+          const apy30d       = vault.analytics?.apy30d
+          const tvlRaw       = Number(vault.analytics?.tvl?.usd ?? 0)
           const isComposable = vault.isTransactional !== false
           const isRedeemable = vault.isRedeemable !== false
           const isStablecoin = vault.tags?.includes('stablecoin')
@@ -412,14 +470,14 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
               key={key + i}
               className={`px-6 py-4 grid gap-3 items-center hover:bg-surface-container-low transition-colors
                 ${isBest ? 'bg-tertiary-container/5' : ''}`}
-              style={{ gridTemplateColumns: '32px 1fr 90px 90px 100px 110px 80px 90px' }}
+              style={{ gridTemplateColumns: '32px 1fr 90px 90px 100px 110px 100px 90px' }}
             >
               {/* Rank */}
               <div className="text-center">
                 <span className="text-sm font-black text-on-surface-variant">{pageIndex * PAGE_SIZE + i + 1}</span>
               </div>
 
-              {/* Vault name + badges */}
+              {/* Vault name + tags */}
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-xl bg-surface-container flex items-center justify-center shrink-0">
                   <span className="material-symbols-outlined text-on-surface-variant text-[16px]">account_balance</span>
@@ -428,33 +486,66 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <p className="font-bold text-sm text-on-surface truncate">{vault.name}</p>
                     {isBest && (
-                      <span className="px-1.5 py-0.5 bg-on-tertiary-container text-white rounded text-[9px] font-black shrink-0">Doctor's Pick</span>
+                      <span className="px-1.5 py-0.5 bg-on-tertiary-container text-white rounded text-[9px] font-black shrink-0">
+                        Doctor's Pick
+                      </span>
                     )}
                   </div>
-                  <p className="text-xs text-on-surface-variant truncate">{vault.protocol?.name} · {vault.network ?? `Chain ${vault.chainId}`}</p>
-                  <div className="flex gap-1 mt-1 flex-wrap">
+                  <p className="text-xs text-on-surface-variant truncate">
+                    {vault.protocol?.name} · {vault.network ?? `Chain ${vault.chainId}`}
+                  </p>
+                  <div className="flex gap-1 mt-1 flex-wrap items-center">
+                    {/* Token symbols — self-explanatory, no tooltip needed */}
                     {vault.underlyingTokens?.slice(0, 2).map((t, ti) => (
-                      <span key={ti} className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[9px] font-bold">{t.symbol}</span>
+                      <Badge key={ti} className="bg-surface-container text-on-surface-variant">
+                        {t.symbol}
+                      </Badge>
                     ))}
+
                     {isStablecoin && (
-                      <span className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[9px] font-bold">Stablecoin</span>
+                      <Tooltip text="This vault holds stablecoin assets (low price volatility)" position="top">
+                        <Badge className="bg-surface-container text-on-surface-variant cursor-default">
+                          Stablecoin
+                        </Badge>
+                      </Tooltip>
                     )}
+
                     {isHighLiq && !isBest && (
-                      <span className="px-1.5 py-0.5 bg-secondary-container text-on-secondary-container rounded text-[9px] font-bold">High Liquidity</span>
+                      <Tooltip text="TVL exceeds $50M — high liquidity means easier entry and exit" position="top">
+                        <Badge className="bg-secondary-container text-on-secondary-container cursor-default">
+                          High Liquidity
+                        </Badge>
+                      </Tooltip>
                     )}
+
                     {isComposable && !isBest && (
-                      <span className="px-1.5 py-0.5 bg-on-tertiary-container/10 text-on-tertiary-container rounded text-[9px] font-black">⚡ Cross-chain</span>
+                      <Tooltip text="Deposits are supported via Composer" position="top">
+                        <Badge className="bg-on-tertiary-container/10 text-on-tertiary-container font-black cursor-default">
+                          ⚡ Cross-chain
+                        </Badge>
+                      </Tooltip>
                     )}
+
                     {!isComposable && (
-                      <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-black">🔒 Same-chain</span>
+                      <Tooltip text="Only same-chain deposits are supported for this vault" position="top">
+                        <Badge className="bg-amber-100 text-amber-700 font-black cursor-default">
+                          🔒 Same-chain
+                        </Badge>
+                      </Tooltip>
                     )}
-                    {!isRedeemable && (
-                      <span
-                        className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-black"
-                        title="Withdrawal not supported via LiFi Composer. Use protocol UI."
-                      >
-                        ⚠ Not via Composer
-                      </span>
+
+                    {isRedeemable ? (
+                      <Tooltip text="Withdrawals are supported via Composer" position="top">
+                        <Badge className="bg-emerald-100 text-emerald-700 font-black cursor-default">
+                          ✓ Redeemable
+                        </Badge>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip text="Withdrawals are not supported via Composer" position="top">
+                        <Badge className="bg-amber-100 text-amber-700 font-black cursor-default">
+                          ⚠ Not Redeemable
+                        </Badge>
+                      </Tooltip>
                     )}
                   </div>
                 </div>
@@ -477,12 +568,12 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
                 <p className="font-bold text-sm text-on-surface">{fmtTvl(tvlRaw)}</p>
               </div>
 
-              {/* Prediction */}
+              {/* APP prediction */}
               <div className="flex justify-center">
                 <PredictionCell predictions={predictions} />
               </div>
 
-              {/* Risk */}
+              {/* Risk Grade */}
               <div className="flex justify-center">
                 <RiskBadge riskData={riskData} />
               </div>
@@ -516,14 +607,19 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
             <span className="material-symbols-outlined text-[18px]">chevron_left</span>Previous
           </button>
           <div className="flex items-center gap-1">
-            {Array.from({ length: totalPages }, (_, i) => i).map(p => {
+            {Array.from({ length: totalPages }, (_, idx) => idx).map(p => {
               const show = p === 0 || p === totalPages - 1 || Math.abs(p - pageIndex) <= 2
               const isEllipsis = !show && (p === 1 || p === totalPages - 2)
               if (!show && !isEllipsis) return null
               if (isEllipsis) return <span key={p} className="px-1 text-on-surface-variant text-sm">…</span>
               return (
-                <button key={p} onClick={() => onPageChange(p)}
-                  className={`w-9 h-9 rounded-full text-sm font-bold transition-all ${p === pageIndex ? 'bg-primary-container text-white' : 'text-on-surface-variant hover:bg-surface-container'}`}>
+                <button
+                  key={p}
+                  onClick={() => onPageChange(p)}
+                  className={`w-9 h-9 rounded-full text-sm font-bold transition-all ${
+                    p === pageIndex ? 'bg-primary-container text-white' : 'text-on-surface-variant hover:bg-surface-container'
+                  }`}
+                >
                   {p + 1}
                 </button>
               )
@@ -565,20 +661,20 @@ function LoadingSkeleton() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function VaultPage() {
-  const [chains, setChains]               = useState([])
-  const [selectedChain, setSelectedChain] = useState(null)
-  const [allVaults, setAllVaults]         = useState([])
-  const [llamaPools, setLlamaPools]       = useState([])
-  const [riskMap, setRiskMap]             = useState(new Map())
-  const [llamaPoolMap, setLlamaPoolMap]   = useState(new Map())
-  const [doctorsChoice, setDoctorsChoice] = useState(null)
-  const [pageIndex, setPageIndex]         = useState(0)
-  const [loading, setLoading]             = useState(false)
-  const [llamaLoading, setLlamaLoading]   = useState(false)
-  const [chainsLoading, setChainsLoading] = useState(true)
-  const [error, setError]                 = useState(null)
+  const [chains, setChains]                 = useState([])
+  const [selectedChain, setSelectedChain]   = useState(null)
+  const [allVaults, setAllVaults]           = useState([])
+  const [llamaPools, setLlamaPools]         = useState([])
+  const [riskMap, setRiskMap]               = useState(new Map())
+  const [llamaPoolMap, setLlamaPoolMap]     = useState(new Map())
+  const [doctorsChoice, setDoctorsChoice]   = useState(null)
+  const [pageIndex, setPageIndex]           = useState(0)
+  const [loading, setLoading]               = useState(false)
+  const [llamaLoading, setLlamaLoading]     = useState(false)
+  const [chainsLoading, setChainsLoading]   = useState(true)
+  const [error, setError]                   = useState(null)
   const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
-  const [depositModal, setDepositModal]   = useState(null)
+  const [depositModal, setDepositModal]     = useState(null)
 
   const [filters, setFilters] = useState({
     protocol: '',
@@ -589,19 +685,14 @@ export default function VaultPage() {
     apyMax:   '',
   })
 
-  // Load chains
   useEffect(() => {
     setChainsLoading(true)
     getSupportedChains()
-      .then(data => {
-        setChains(data)
-        if (data.length > 0) setSelectedChain(data[0])
-      })
+      .then(data => { setChains(data); if (data.length > 0) setSelectedChain(data[0]) })
       .catch(err => setError('Failed to load chains: ' + err.message))
       .finally(() => setChainsLoading(false))
   }, [])
 
-  // Load DeFiLlama pools once
   useEffect(() => {
     setLlamaLoading(true)
     fetchDefiLlamaPools()
@@ -609,21 +700,14 @@ export default function VaultPage() {
       .finally(() => setLlamaLoading(false))
   }, [])
 
-  // Load vaults when chain changes
   const loadVaultsForChain = useCallback(async (chain) => {
     if (!chain) return
-    setLoading(true)
-    setError(null)
-    setAllVaults([])
-    setPageIndex(0)
-    setRiskMap(new Map())
-    setLlamaPoolMap(new Map())
-    setDoctorsChoice(null)
+    setLoading(true); setError(null); setAllVaults([]); setPageIndex(0)
+    setRiskMap(new Map()); setLlamaPoolMap(new Map()); setDoctorsChoice(null)
     try {
       const vaults = await getVaultsForChain({ chainId: chain.chainId })
       setAllVaults(vaults)
-      const remaining = getCacheExpiresIn(CACHE_KEYS.chainVaults(chain.chainId))
-      setCacheExpiresIn(remaining)
+      setCacheExpiresIn(getCacheExpiresIn(CACHE_KEYS.chainVaults(chain.chainId)))
     } catch (err) {
       setError('Failed to load vaults: ' + err.message)
     } finally {
@@ -631,47 +715,31 @@ export default function VaultPage() {
     }
   }, [])
 
-  useEffect(() => {
-    loadVaultsForChain(selectedChain)
-  }, [selectedChain, loadVaultsForChain])
+  useEffect(() => { loadVaultsForChain(selectedChain) }, [selectedChain, loadVaultsForChain])
 
-  // Compute risk scores when both datasets are ready
   useEffect(() => {
     if (!allVaults.length || !llamaPools.length) return
-
-    const newRiskMap = new Map()
+    const newRiskMap     = new Map()
     const newLlamaPoolMap = new Map()
-
     for (const vault of allVaults) {
-      const key = vault.slug ?? vault.address
+      const key  = vault.slug ?? vault.address
       const pool = matchVaultToPool(vault, llamaPools)
-      if (pool) {
-        newLlamaPoolMap.set(key, pool)
-        newRiskMap.set(key, computeRiskScore(vault, pool))
-      } else {
-        newRiskMap.set(key, null)
-      }
+      if (pool) { newLlamaPoolMap.set(key, pool); newRiskMap.set(key, computeRiskScore(vault, pool)) }
+      else       { newRiskMap.set(key, null) }
     }
-
     setRiskMap(newRiskMap)
     setLlamaPoolMap(newLlamaPoolMap)
-
-    // Pick doctor's choice based on risk grades
-    const dc = pickDoctorsChoice(allVaults, newRiskMap)
-    setDoctorsChoice(dc)
+    setDoctorsChoice(pickDoctorsChoice(allVaults, newRiskMap))
   }, [allVaults, llamaPools])
 
-  // Cache expiry ticker
   useEffect(() => {
     if (!selectedChain) return
     const interval = setInterval(() => {
-      const remaining = getCacheExpiresIn(CACHE_KEYS.chainVaults(selectedChain.chainId))
-      setCacheExpiresIn(remaining)
+      setCacheExpiresIn(getCacheExpiresIn(CACHE_KEYS.chainVaults(selectedChain.chainId)))
     }, 10000)
     return () => clearInterval(interval)
   }, [selectedChain])
 
-  // Apply filters + sort
   const filteredVaults = allVaults.filter(vault => {
     if (filters.protocol && vault.protocol?.name !== filters.protocol) return false
     const tvl = Number(vault.analytics?.tvl?.usd ?? 0)
@@ -680,8 +748,7 @@ export default function VaultPage() {
     if (filters.apyMin !== '' && apy < Number(filters.apyMin)) return false
     if (filters.apyMax !== '' && apy > Number(filters.apyMax)) return false
     if (filters.grade) {
-      const key = vault.slug ?? vault.address
-      const risk = riskMap.get(key)
+      const risk = riskMap.get(vault.slug ?? vault.address)
       if (!risk || risk.grade !== filters.grade) return false
     }
     return true
@@ -693,11 +760,9 @@ export default function VaultPage() {
 
   const totalPages  = Math.ceil(filteredVaults.length / PAGE_SIZE)
   const pagedVaults = filteredVaults.slice(pageIndex * PAGE_SIZE, (pageIndex + 1) * PAGE_SIZE)
-
-  // Reset page on filter change
   useEffect(() => { setPageIndex(0) }, [filters])
 
-  const dcKey = doctorsChoice ? (doctorsChoice.slug ?? doctorsChoice.address) : null
+  const dcKey      = doctorsChoice ? (doctorsChoice.slug ?? doctorsChoice.address) : null
   const dcRiskData = dcKey ? (riskMap.get(dcKey) ?? null) : null
 
   return (
@@ -724,7 +789,6 @@ export default function VaultPage() {
         </div>
       </header>
 
-      {/* Chain tabs */}
       {chainsLoading ? (
         <div className="flex gap-2 mb-6 animate-pulse">
           {[1,2,3,4,5].map(i => <div key={i} className="h-8 w-24 bg-surface-container rounded-full" />)}
@@ -747,7 +811,6 @@ export default function VaultPage() {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="mb-6 p-4 bg-error-container/30 border border-error-container rounded-xl text-on-error-container text-sm font-medium">
           <strong>Error:</strong> {error}
@@ -766,7 +829,6 @@ export default function VaultPage() {
 
       {!loading && allVaults.length > 0 && (
         <>
-          {/* Doctor's Choice */}
           {doctorsChoice && (
             <DoctorsChoiceCard
               vault={doctorsChoice}
@@ -776,13 +838,8 @@ export default function VaultPage() {
             />
           )}
 
-          {/* Risk legend */}
-          <RiskLegend />
+          <FilterBar vaults={allVaults} filters={filters} onFiltersChange={f => setFilters(f)} />
 
-          {/* Filters */}
-          <FilterBar vaults={allVaults} filters={filters} onFiltersChange={f => { setFilters(f) }} />
-
-          {/* Empty filter state */}
           {filteredVaults.length === 0 ? (
             <div className="p-12 text-center text-on-surface-variant">
               <span className="material-symbols-outlined text-4xl block mb-3">filter_list_off</span>
