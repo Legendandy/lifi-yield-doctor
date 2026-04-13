@@ -15,6 +15,9 @@ import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
 
 const PAGE_SIZE = 20
 
+// Minimum TVL enforced at the display layer — mirrors earnApi.isVaultSane
+const MIN_TVL_DISPLAY = 1_000_000 // $1M hard floor
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtApy(val) {
   if (val == null) return 'N/A'
@@ -358,8 +361,8 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
             onChange={e => onFiltersChange({ ...filters, minTvl: Number(e.target.value) })}
             className="px-3 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
           >
-            <option value={0}>Any TVL</option>
-            <option value={1_000_000}>$1M+</option>
+            {/* Floor is always $1M — options below that are removed */}
+            <option value={0}>$1M+ (min)</option>
             <option value={5_000_000}>$5M+</option>
             <option value={10_000_000}>$10M+</option>
             <option value={50_000_000}>$50M+</option>
@@ -422,7 +425,7 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
       <div className="px-6 py-4 border-b border-surface-container flex justify-between items-center bg-surface-container-low rounded-t-2xl">
         <div>
           <h3 className="font-headline font-bold text-xl text-on-surface">All Vaults</h3>
-          <p className="text-xs text-on-surface-variant mt-0.5">{totalVaults} vaults</p>
+          <p className="text-xs text-on-surface-variant mt-0.5">{totalVaults} vaults · All have TVL ≥ $1M</p>
         </div>
         <span className="text-[10px] bg-surface-container px-3 py-1 rounded-full font-bold text-on-surface-variant uppercase tracking-wider">
           Page {pageIndex + 1} of {totalPages}
@@ -630,7 +633,7 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
       <div className="px-6 py-3 border-t border-surface-container bg-surface-container-low rounded-b-2xl">
         <p className="text-[10px] text-on-surface-variant text-center">
           Showing {pageIndex * PAGE_SIZE + 1}–{Math.min((pageIndex + 1) * PAGE_SIZE, totalVaults)} of {totalVaults} vaults
-          · Risk data powered by DeFiLlama · APP = APY Prediction Probability
+          · All vaults have TVL ≥ $1M · Risk data powered by DeFiLlama · APP = APY Prediction Probability
         </p>
       </div>
     </div>
@@ -645,6 +648,78 @@ function LoadingSkeleton() {
         {Array.from({ length: 8 }).map((_, i) => (
           <div key={i} className="h-16 bg-surface-container rounded-xl" />
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Empty state: chain has vaults but user-applied filters removed them all ──
+function FilterEmptyState({ onClearFilters }) {
+  return (
+    <div className="p-12 text-center space-y-4">
+      <div className="w-16 h-16 bg-surface-container rounded-full flex items-center justify-center mx-auto">
+        <span className="material-symbols-outlined text-3xl text-on-surface-variant">filter_list_off</span>
+      </div>
+      <h3 className="font-headline font-bold text-lg text-on-surface">No vaults match your filters</h3>
+      <p className="text-sm text-on-surface-variant max-w-sm mx-auto">
+        Try adjusting the protocol, APY range, TVL, or risk grade filters to broaden your search.
+      </p>
+      <button
+        onClick={onClearFilters}
+        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold bg-primary-container text-white hover:opacity-90 transition-all"
+      >
+        <span className="material-symbols-outlined text-[16px]">refresh</span>
+        Clear all filters
+      </button>
+    </div>
+  )
+}
+
+// ─── Empty state: chain genuinely has no vaults meeting the $1M TVL / APY floor ──
+function ChainSafuEmptyState({ chainName }) {
+  return (
+    <div className="bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container overflow-hidden">
+      {/* Top accent strip */}
+      <div className="h-1.5 w-full bg-gradient-to-r from-on-tertiary-container via-primary-container to-on-tertiary-container opacity-60" />
+
+      <div className="p-12 text-center space-y-5">
+        <div className="relative w-20 h-20 mx-auto">
+          <div className="w-20 h-20 bg-on-tertiary-container/10 rounded-full flex items-center justify-center">
+            <span className="material-symbols-outlined text-on-tertiary-container text-4xl">health_and_safety</span>
+          </div>
+          <span className="absolute -top-1 -right-1 w-7 h-7 bg-amber-100 border-2 border-white rounded-full flex items-center justify-center">
+            <span className="material-symbols-outlined text-amber-600 text-[14px]">warning</span>
+          </span>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-on-tertiary-container">
+            Clinical Assessment · {chainName}
+          </p>
+          <h3 className="font-headline font-extrabold text-2xl text-on-surface leading-tight">
+            No vaults on {chainName} meet<br />our safety specifications.
+          </h3>
+        </div>
+
+        <div className="max-w-md mx-auto space-y-3">
+          <p className="text-sm text-on-surface-variant leading-relaxed">
+            The Doctor has reviewed every available vault on this chain against our minimum
+            requirements — <span className="font-bold text-on-surface">$1M TVL</span> and a{' '}
+            <span className="font-bold text-on-surface">meaningful APY</span> — and none have
+            passed the screening. Deploying capital here would expose you to unnecessary risk
+            with insufficient liquidity to protect your position.
+          </p>
+
+          <div className="flex items-center justify-center gap-2 py-3 px-5 bg-on-tertiary-container/5 border border-on-tertiary-container/20 rounded-xl w-fit mx-auto">
+            <span className="material-symbols-outlined text-on-tertiary-container text-[18px]">verified_user</span>
+            <p className="text-sm font-black text-on-tertiary-container tracking-wide">STAY SAFU — your capital deserves better.</p>
+          </div>
+
+          <p className="text-xs text-on-surface-variant">
+            Switch to a chain like <span className="font-bold text-on-surface">Ethereum, Base, or Arbitrum</span> to
+            find vetted, high-liquidity vaults ready for deposit.
+          </p>
+        </div>
       </div>
     </div>
   )
@@ -732,25 +807,45 @@ export default function VaultPage() {
     return () => clearInterval(interval)
   }, [selectedChain])
 
+  // Determine whether any user-adjustable filter (beyond the $1M TVL floor) is active
+  const hasUserFilters = !!(
+    filters.search ||
+    filters.protocol ||
+    filters.minTvl > 0 ||
+    filters.grade ||
+    filters.apyMin !== '' ||
+    filters.apyMax !== ''
+  )
+
   const filteredVaults = allVaults.filter(vault => {
+    // ── Hard floor: always enforce $1M TVL regardless of user filter setting ──
+    const tvl = Number(vault.analytics?.tvl?.usd ?? 0)
+    if (tvl < MIN_TVL_DISPLAY) return false
+
     // Search: vault name, protocol, token symbols
     if (filters.search) {
       const q = filters.search.toLowerCase()
-      const nameMatch     = vault.name.toLowerCase().includes(q)
-      const protoMatch    = vault.protocol?.name.toLowerCase().includes(q)
-      const tokenMatch    = vault.underlyingTokens?.some(t => t.symbol.toLowerCase().includes(q))
+      const nameMatch  = vault.name.toLowerCase().includes(q)
+      const protoMatch = vault.protocol?.name.toLowerCase().includes(q)
+      const tokenMatch = vault.underlyingTokens?.some(t => t.symbol.toLowerCase().includes(q))
       if (!nameMatch && !protoMatch && !tokenMatch) return false
     }
+
     if (filters.protocol && vault.protocol?.name !== filters.protocol) return false
-    const tvl = Number(vault.analytics?.tvl?.usd ?? 0)
-    if (tvl < filters.minTvl) return false
+
+    // Additional TVL filter on top of the $1M floor
+    const effectiveMinTvl = Math.max(filters.minTvl, MIN_TVL_DISPLAY)
+    if (tvl < effectiveMinTvl) return false
+
     const apy = vault.analytics?.apy?.total ?? 0
     if (filters.apyMin !== '' && apy < Number(filters.apyMin)) return false
     if (filters.apyMax !== '' && apy > Number(filters.apyMax)) return false
+
     if (filters.grade) {
       const risk = riskMap.get(vault.slug ?? vault.address)
       if (!risk || risk.grade !== filters.grade) return false
     }
+
     return true
   }).sort((a, b) => {
     const apyA = a.analytics?.apy?.total ?? 0
@@ -765,13 +860,15 @@ export default function VaultPage() {
   const dcKey      = doctorsChoice ? (doctorsChoice.slug ?? doctorsChoice.address) : null
   const dcRiskData = dcKey ? (riskMap.get(dcKey) ?? null) : null
 
+  const clearFilters = () => setFilters({ search: '', protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })
+
   return (
     <AppShell>
       <header className="mb-6 flex justify-between items-end flex-wrap gap-4">
         <div>
           <h1 className="text-3xl font-headline font-extrabold tracking-tight text-on-surface">Vault Explorer</h1>
           <p className="text-on-surface-variant font-medium mt-1">
-            Select a chain to browse all vaults. Risk grades powered by DeFiLlama.
+            Select a chain to browse vaults. All listings meet a minimum $1M TVL threshold.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -820,11 +917,9 @@ export default function VaultPage() {
 
       {loading && <LoadingSkeleton />}
 
+      {/* Chain has no vaults at all (before any user filtering) */}
       {!loading && selectedChain && allVaults.length === 0 && !error && (
-        <div className="p-12 text-center text-on-surface-variant">
-          <span className="material-symbols-outlined text-4xl block mb-3">search_off</span>
-          No vaults found on {selectedChain.name}.
-        </div>
+        <ChainSafuEmptyState chainName={selectedChain.name} />
       )}
 
       {!loading && allVaults.length > 0 && (
@@ -841,16 +936,10 @@ export default function VaultPage() {
           <FilterBar vaults={allVaults} filters={filters} onFiltersChange={f => setFilters(f)} />
 
           {filteredVaults.length === 0 ? (
-            <div className="p-12 text-center text-on-surface-variant">
-              <span className="material-symbols-outlined text-4xl block mb-3">filter_list_off</span>
-              No vaults match your filters.
-              <button
-                onClick={() => setFilters({ search: '', protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })}
-                className="block mx-auto mt-3 text-sm font-bold text-primary-container hover:underline"
-              >
-                Clear filters
-              </button>
-            </div>
+            // Show the appropriate empty state depending on whether the user touched filters
+            hasUserFilters
+              ? <FilterEmptyState onClearFilters={clearFilters} />
+              : <ChainSafuEmptyState chainName={selectedChain?.name} />
           ) : (
             <VaultTable
               vaults={pagedVaults}
