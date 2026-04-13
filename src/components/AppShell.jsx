@@ -16,7 +16,7 @@ export default function AppShell({ children }) {
   const navItems = [
     { path: '/dashboard', icon: 'dashboard',        label: 'Dashboard'   },
     { path: '/vaults',    icon: 'account_balance',  label: 'Vaults'      },
-    { path: '/compare',   icon: 'compare_arrows',   label: 'Compare APY' },
+    { path: '/compare',   icon: 'compare_arrows',   label: 'Compare Vaults' },
   ]
 
   return (
@@ -50,16 +50,6 @@ export default function AppShell({ children }) {
 
       {/* SIDEBAR */}
       <aside className="h-screen w-64 fixed left-0 top-0 bg-slate-50 flex flex-col p-4 space-y-6 pt-20">
-        <div className="flex items-center gap-3 px-2 mb-2">
-          <div className="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center text-white">
-            <span className="material-symbols-outlined">health_and_safety</span>
-          </div>
-          <div>
-            <h2 className="text-base font-black text-on-surface leading-tight font-headline">Yield Doctor</h2>
-            <p className="text-[10px] uppercase tracking-widest text-on-primary-container font-bold">Clinical AI Analysis</p>
-          </div>
-        </div>
-
         <nav className="flex-1 space-y-1">
           {navItems.map(({ path, icon, label }) => {
             const active = location.pathname === path

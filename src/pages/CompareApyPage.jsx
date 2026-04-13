@@ -1,8 +1,9 @@
 // src/pages/CompareApyPage.jsx
 // APY from API is already a percentage (e.g. 3.8 = 3.8%) — NO * 100 anywhere
 import { useState, useEffect } from 'react'
-import { useAccount } from 'wagmi'
+import { useLocation } from 'react-router-dom'
 import AppShell from '../components/AppShell'
+import DepositModal from '../components/DepositModal'
 import {
   getSupportedChains,
   getVaultsForChain,
@@ -93,8 +94,7 @@ function SelectorHeader({ label }) {
   )
 }
 
-// VaultSelector — always starts at chain picker, no portfolio step
-function VaultSelector({ label, onSelect }) {
+function VaultSelector({ label, onSelect, preSelectedVault }) {
   const [chains, setChains]               = useState([])
   const [selectedChain, setSelectedChain] = useState(null)
   const [vaults, setVaults]               = useState([])
@@ -107,6 +107,27 @@ function VaultSelector({ label, onSelect }) {
   useEffect(() => {
     loadChains()
   }, [])
+
+  // If a pre-selected vault is passed (from navigation state), auto-select it
+  useEffect(() => {
+    if (preSelectedVault && step !== 'loading-chains') {
+      handlePreSelect(preSelectedVault)
+    }
+  }, [preSelectedVault, step])
+
+  async function handlePreSelect(vault) {
+    setEnriching(true)
+    try {
+      const full = await ensureFullVaultData({
+        ...vault,
+        network: vault.network ?? resolveChainName(vault.chainId),
+      })
+      onSelect(full)
+      setStep('done')
+    } finally {
+      setEnriching(false)
+    }
+  }
 
   async function loadChains() {
     setStep('loading-chains')
@@ -298,7 +319,7 @@ function ComparisonRow({ metricLabel, valA, valB, winA, winB, icon, nodeA, nodeB
   )
 }
 
-function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
+function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose, onDepositA, onDepositB }) {
   if (!vaultA || !vaultB) return null
 
   const apyA   = vaultA.analytics?.apy?.total
@@ -358,6 +379,8 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
     )
   }
 
+  const winnerOnDeposit = winnerVault === vaultA ? onDepositA : onDepositB
+
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container overflow-hidden">
       <div className="px-6 py-4 border-b border-surface-container flex items-center justify-between bg-surface-container-low">
@@ -414,6 +437,7 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
         <ComparisonRow metricLabel="Chain"    valA={chainNameA}           valB={chainNameB}           winA={false} winB={false} icon="link" />
       </div>
 
+      {/* Winner + Deposit CTA */}
       <div className="mx-6 mb-6 rounded-2xl overflow-hidden border border-surface-container">
         <div className={`p-5 flex items-center justify-between gap-4 ${isTie ? 'bg-surface-container' : winnerVault === vaultA ? 'bg-primary-container' : 'bg-on-tertiary-container/90'}`}>
           <div className="flex items-center gap-3">
@@ -435,15 +459,47 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
             {isTie ? 'Tie' : winnerLabel}
           </div>
         </div>
+
         {!isTie && (
-          <div className="p-4 bg-surface-container-low">
-            <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant">Doctor's Recommendation</p>
-            <p className="text-sm font-bold text-on-surface mt-0.5">
-              Deposit into <span className="text-on-tertiary-container">{winnerVault.name}</span> on {winnerVault.network ?? resolveChainName(winnerVault.chainId)}
-            </p>
-            <p className="text-[10px] text-on-surface-variant mt-0.5">
-              {fmt(winnerLabel === 'Vault A' ? apyA : apyB)} APY · {winnerVault.protocol.name}
-            </p>
+          <div className="p-4 bg-surface-container-low flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant">Doctor's Recommendation</p>
+              <p className="text-sm font-bold text-on-surface mt-0.5">
+                Deposit into <span className="text-on-tertiary-container">{winnerVault.name}</span> on {winnerVault.network ?? resolveChainName(winnerVault.chainId)}
+              </p>
+              <p className="text-[10px] text-on-surface-variant mt-0.5">
+                {fmt(winnerLabel === 'Vault A' ? apyA : apyB)} APY · {winnerVault.protocol.name}
+              </p>
+            </div>
+            <button
+              onClick={() => winnerOnDeposit(winnerVault)}
+              className="shrink-0 flex items-center gap-2 px-5 py-2.5 bg-primary-container text-white rounded-xl font-black text-sm hover:opacity-90 transition-all shadow-md"
+            >
+              <span className="material-symbols-outlined text-[16px]">add_circle</span>
+              Deposit
+            </button>
+          </div>
+        )}
+
+        {isTie && (
+          <div className="p-4 bg-surface-container-low flex items-center justify-between gap-4">
+            <p className="text-sm font-bold text-on-surface">Both vaults are strong — deposit into either</p>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => onDepositA(vaultA)}
+                className="flex items-center gap-1.5 px-4 py-2 border-2 border-primary-container text-primary-container rounded-xl font-black text-xs hover:bg-primary-container hover:text-white transition-all"
+              >
+                <span className="material-symbols-outlined text-[14px]">looks_one</span>
+                Vault A
+              </button>
+              <button
+                onClick={() => onDepositB(vaultB)}
+                className="flex items-center gap-1.5 px-4 py-2 bg-primary-container text-white rounded-xl font-black text-xs hover:opacity-90 transition-all"
+              >
+                <span className="material-symbols-outlined text-[14px]">looks_two</span>
+                Vault B
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -452,12 +508,17 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
 }
 
 export default function ComparePage() {
+  const location = useLocation()
   const [vaultA, setVaultA]                 = useState(null)
   const [vaultB, setVaultB]                 = useState(null)
   const [showComparison, setShowComparison] = useState(false)
   const [llamaPools, setLlamaPools]         = useState([])
   const [riskDataA, setRiskDataA]           = useState(null)
   const [riskDataB, setRiskDataB]           = useState(null)
+  const [depositModal, setDepositModal]     = useState(null)
+
+  // Pre-selected vault from navigation state (e.g. from Dashboard)
+  const preSelectedVaultA = location.state?.vaultA ?? null
 
   useEffect(() => {
     fetchDefiLlamaPools().then(pools => setLlamaPools(pools)).catch(() => {})
@@ -514,7 +575,7 @@ export default function ComparePage() {
       {!showComparison ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           {!vaultA
-            ? <VaultSelector label="Vault A" onSelect={setVaultA} />
+            ? <VaultSelector label="Vault A" onSelect={setVaultA} preSelectedVault={preSelectedVaultA} />
             : <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => { setVaultA(null); setRiskDataA(null) }} />}
 
           {!vaultA
@@ -525,7 +586,7 @@ export default function ComparePage() {
               </div>
             )
             : !vaultB
-              ? <VaultSelector label="Vault B" onSelect={setVaultB} />
+              ? <VaultSelector label="Vault B" onSelect={setVaultB} preSelectedVault={null} />
               : <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => { setVaultB(null); setRiskDataB(null) }} />}
         </div>
       ) : (
@@ -539,7 +600,15 @@ export default function ComparePage() {
 
       {showComparison && vaultA && vaultB && (
         <div className="mb-6">
-          <ComparisonPanel vaultA={vaultA} vaultB={vaultB} riskDataA={riskDataA} riskDataB={riskDataB} onClose={resetComparison} />
+          <ComparisonPanel
+            vaultA={vaultA}
+            vaultB={vaultB}
+            riskDataA={riskDataA}
+            riskDataB={riskDataB}
+            onClose={resetComparison}
+            onDepositA={(v) => setDepositModal(v)}
+            onDepositB={(v) => setDepositModal(v)}
+          />
         </div>
       )}
 
@@ -551,6 +620,14 @@ export default function ComparePage() {
             Start New Comparison
           </button>
         </div>
+      )}
+
+      {depositModal && (
+        <DepositModal
+          vault={depositModal}
+          onClose={() => setDepositModal(null)}
+          onSuccess={() => setDepositModal(null)}
+        />
       )}
     </AppShell>
   )

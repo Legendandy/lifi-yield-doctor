@@ -5,9 +5,13 @@ import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
 import DepositModal from '../components/DepositModal'
 import WithdrawModal from '../components/WithdrawModal'
-import { getPortfolioPositions, getVaults, getBestVaultAcrossAllChains } from '../services/earnApi'
-import { getDiagnosis } from '../services/aiDiagnosis'
-import { getCacheExpiresIn, CACHE_KEYS } from '../services/vaultCache'
+import { getPortfolioPositions, getVaultsForChain, getSupportedChains } from '../services/earnApi'
+import {
+  fetchDefiLlamaPools,
+  matchVaultToPool,
+  computeRiskScore,
+  GRADE_CONFIG,
+} from '../services/defiLlama'
 import { SUPPORTED_CHAINS } from '../services/tokenBalances'
 
 const CHAIN_NAMES = Object.fromEntries(SUPPORTED_CHAINS.map(c => [c.id, c.name]))
@@ -16,74 +20,461 @@ function getChainName(chainId) {
   return CHAIN_NAMES[chainId] ?? `Chain ${chainId}`
 }
 
-function formatTimeRemaining(ms) {
-  if (!ms || ms <= 0) return null
-  const mins = Math.floor(ms / 60000)
-  const secs = Math.floor((ms % 60000) / 1000)
-  if (mins > 0) return `${mins}m ${secs}s`
-  return `${secs}s`
+function fmtApy(val) {
+  if (val == null) return 'N/A'
+  return `${val.toFixed(2)}%`
+}
+
+function fmtTvl(usd) {
+  const n = Number(usd ?? 0)
+  if (n >= 1_000_000_000) return `$${(n / 1e9).toFixed(1)}B`
+  if (n >= 1_000_000) return `$${(n / 1e6).toFixed(1)}M`
+  if (n >= 1_000) return `$${(n / 1e3).toFixed(0)}K`
+  return `$${n.toFixed(0)}`
+}
+
+// ─── Vault Detail Modal ───────────────────────────────────────────────────────
+// Changes from original:
+// 1. Removed risk breakdown section
+// 2. Removed (i) beside APP — hover on "APP" text shows full meaning
+// 3. Binned confidence label has its own color independent of prediction direction
+// 4. Hovering on the APP percentage shows a plain-English explanation
+
+function VaultDetailModal({ vault, riskData, llamaPool, onClose, onDeposit, onCompare }) {
+  if (!vault) return null
+
+  const apy = vault.analytics?.apy?.total
+  const apy30d = vault.analytics?.apy30d
+  const tvl = Number(vault.analytics?.tvl?.usd ?? 0)
+  const chainName = vault._chainName ?? getChainName(vault.chainId)
+  const predictions = llamaPool?.predictions ?? null
+  const isComposable = vault.isTransactional !== false
+  const isRedeemable = vault.isRedeemable !== false
+
+  const cfg = riskData ? GRADE_CONFIG[riskData.grade] : null
+
+  // Prediction display
+  let predArrow = null,
+    predColor = null,
+    predBg = null,
+    predPct = null,
+    predLabel = null,
+    predDirection = null,
+    predConfText = null
+
+  if (predictions?.predictedClass != null) {
+    const cls = (predictions.predictedClass ?? '').toLowerCase()
+    predPct = Math.round(Number(predictions.predictedProbability))
+    const conf = predictions.binnedConfidence
+    predLabel = { 1: 'Low conf.', 2: 'Med conf.', 3: 'High conf.' }[conf] ?? ''
+    predConfText = { 1: 'low confidence', 2: 'medium confidence', 3: 'high confidence' }[conf] ?? ''
+
+    if (cls.includes('up')) {
+      predArrow = '↑'
+      predColor = '#009844'
+      predBg = 'rgba(0,152,68,0.10)'
+      predDirection = 'increasing'
+    } else if (cls.includes('down')) {
+      predArrow = '↓'
+      predColor = '#ba1a1a'
+      predBg = 'rgba(186,26,26,0.10)'
+      predDirection = 'decreasing'
+    } else {
+      predArrow = '→'
+      predColor = '#76777d'
+      predBg = 'rgba(118,119,125,0.10)'
+      predDirection = 'remaining stable'
+    }
+  }
+
+  // Binned confidence has its own color scale, independent of prediction direction
+  const confColor = {
+    1: '#ea580c', // low — orange/warning
+    2: '#d97706', // medium — amber
+    3: '#009844', // high — green
+  }[predictions?.binnedConfidence] ?? '#76777d'
+
+  // Tooltip text for the APP percentage
+  const appTooltip =
+    predPct != null && predDirection != null && predConfText != null
+      ? `Model predicts a ${predPct}% chance of APY ${predDirection} with ${predConfText}`
+      : null
+
+  return (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl flex flex-col"
+        style={{ maxHeight: '90vh' }}
+      >
+        {/* Header */}
+        <div className="px-6 pt-6 pb-4 border-b border-surface-container shrink-0">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                {isComposable && (
+                  <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-1 rounded-full">
+                    <span className="material-symbols-outlined text-[10px]">bolt</span>Cross-chain
+                  </span>
+                )}
+                {isRedeemable && (
+                  <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full">
+                    ✓ Redeemable
+                  </span>
+                )}
+              </div>
+              <h2 className="font-headline font-extrabold text-xl text-on-surface leading-tight">
+                {vault.name}
+              </h2>
+              <p className="text-xs text-on-surface-variant mt-0.5 font-medium">
+                {vault.protocol?.name} · {chainName}
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors shrink-0"
+            >
+              <span className="material-symbols-outlined text-[16px] text-on-surface-variant">
+                close
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {/* Key metrics grid */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-surface-container rounded-2xl p-4">
+              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
+                Current APY
+              </p>
+              <p className="font-headline font-black text-3xl text-on-tertiary-container">
+                {fmtApy(apy)}
+              </p>
+            </div>
+            <div className="bg-surface-container rounded-2xl p-4">
+              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
+                30-Day Avg APY
+              </p>
+              <p className="font-headline font-black text-3xl text-on-surface">
+                {apy30d != null ? fmtApy(apy30d) : '—'}
+              </p>
+            </div>
+            <div className="bg-surface-container rounded-2xl p-4">
+              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
+                Total TVL
+              </p>
+              <p className="font-headline font-black text-2xl text-on-surface">{fmtTvl(tvl)}</p>
+            </div>
+            <div className="bg-surface-container rounded-2xl p-4">
+              <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant mb-1">
+                Risk Grade
+              </p>
+              {riskData ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <span
+                    className="inline-flex items-center justify-center w-10 h-10 text-base font-black rounded-xl border"
+                    style={{
+                      color: cfg.color,
+                      background: cfg.bg,
+                      borderColor: cfg.border,
+                    }}
+                  >
+                    {riskData.grade}
+                  </span>
+                  <div>
+                    <p className="font-black text-sm text-on-surface">{riskData.score}/100</p>
+                    <p className="text-[10px] text-on-surface-variant">{cfg.desc}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="font-headline font-black text-2xl text-on-surface-variant">—</p>
+              )}
+            </div>
+          </div>
+
+          {/* Details rows */}
+          <div className="bg-surface-container rounded-2xl divide-y divide-surface-container-high">
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
+                Protocol
+              </span>
+              <span className="text-sm font-black text-on-surface">
+                {vault.protocol?.name ?? '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
+                Chain
+              </span>
+              <span className="text-sm font-black text-on-surface">{chainName}</span>
+            </div>
+
+            {/* APP row — hover on label shows full meaning; hover on % shows explanation */}
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="relative group/applabel text-xs font-bold text-on-surface-variant uppercase tracking-widest cursor-default">
+                APP
+                {/* Tooltip on APP label */}
+                <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 z-50 opacity-0 group-hover/applabel:opacity-100 transition-opacity duration-150">
+                  <span className="block bg-[#131b2e] text-white text-[10px] font-semibold px-2.5 py-1.5 rounded-lg shadow-xl leading-snug whitespace-nowrap">
+                    APY Prediction Probability
+                  </span>
+                </span>
+              </span>
+
+              {predArrow ? (
+                <div className="flex flex-col items-end gap-0.5">
+                  {/* The percentage badge — hovering shows plain-English explanation */}
+                  <span
+                    className="relative group/apppct inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-sm font-black cursor-default"
+                    style={{ color: predColor, background: predBg }}
+                  >
+                    {predArrow} {predPct}%
+                    {/* Tooltip on APP percentage */}
+                    {appTooltip && (
+                      <span className="pointer-events-none absolute bottom-full right-0 mb-1.5 z-50 opacity-0 group-hover/apppct:opacity-100 transition-opacity duration-150 w-max max-w-[220px]">
+                        <span className="block bg-[#131b2e] text-white text-[10px] font-semibold px-2.5 py-1.5 rounded-lg shadow-xl leading-snug text-right">
+                          {appTooltip}
+                        </span>
+                      </span>
+                    )}
+                  </span>
+
+                  {/* Binned confidence label — uses its own color, not prediction direction color */}
+                  {predLabel && (
+                    <span
+                      className="text-[10px] font-bold"
+                      style={{ color: confColor }}
+                    >
+                      {predLabel}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <span className="text-sm text-on-surface-variant">—</span>
+              )}
+            </div>
+
+            {vault.underlyingTokens?.length > 0 && (
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
+                  Assets
+                </span>
+                <div className="flex gap-1.5 flex-wrap justify-end">
+                  {vault.underlyingTokens.map((t, i) => (
+                    <span
+                      key={i}
+                      className="flex items-center gap-1 px-2 py-0.5 bg-secondary-container text-on-secondary-container rounded-full text-xs font-bold"
+                    >
+                      {t.logoURI && (
+                        <img
+                          src={t.logoURI}
+                          alt={t.symbol}
+                          className="w-3.5 h-3.5 rounded-full"
+                          onError={e => {
+                            e.target.style.display = 'none'
+                          }}
+                        />
+                      )}
+                      {t.symbol}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Risk breakdown intentionally removed */}
+        </div>
+
+        {/* Footer actions */}
+        <div className="px-6 pb-6 pt-2 shrink-0 flex gap-3">
+          <button
+            onClick={() => {
+              onCompare(vault)
+              onClose()
+            }}
+            className="flex-1 py-3.5 rounded-2xl font-headline font-black text-sm border-2 border-primary-container text-primary-container hover:bg-primary-container hover:text-white transition-all flex items-center justify-center gap-2"
+          >
+            <span className="material-symbols-outlined text-[16px]">compare_arrows</span>
+            Compare Vault
+          </button>
+          <button
+            onClick={() => {
+              onDeposit(vault)
+              onClose()
+            }}
+            className="flex-1 py-3.5 rounded-2xl font-headline font-black text-sm bg-primary-container text-white hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-md"
+          >
+            <span className="material-symbols-outlined text-[16px]">add_circle</span>
+            Deposit
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+// ─── Recommended Vaults (Top 10 highest APY, TVL > $10M, across all chains) ──
+function RecommendedVaults({ onDeposit, onVaultClick }) {
+  const [vaults, setVaults] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const chains = await getSupportedChains()
+        // Fetch top vaults from multiple chains in parallel
+        const results = await Promise.allSettled(
+          chains.slice(0, 8).map(chain =>
+            getVaultsForChain({ chainId: chain.chainId, maxPages: 3 })
+              .then(vs => vs.map(v => ({ ...v, _chainName: chain.name })))
+          )
+        )
+        if (cancelled) return
+        const all = results
+          .filter(r => r.status === 'fulfilled')
+          .flatMap(r => r.value)
+          .filter(v => Number(v.analytics?.tvl?.usd ?? 0) >= 10_000_000)
+          .sort((a, b) => (b.analytics?.apy?.total ?? 0) - (a.analytics?.apy?.total ?? 0))
+          .slice(0, 10)
+        setVaults(all)
+      } catch (e) {
+        console.error('RecommendedVaults load error:', e)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  if (loading) {
+    return (
+      <div className="bg-surface-container-lowest rounded-xl clinical-shadow">
+        <div className="p-4 border-b border-surface-container">
+          <h3 className="font-headline font-bold text-on-surface">Recommended Vaults</h3>
+          <p className="text-xs text-on-surface-variant">Highest APY across all chains · TVL &gt; $10M</p>
+        </div>
+        <div className="divide-y divide-surface-container animate-pulse">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="p-4 flex justify-between items-center">
+              <div className="space-y-1.5">
+                <div className="h-3.5 w-40 bg-surface-container rounded" />
+                <div className="h-2.5 w-28 bg-surface-container rounded" />
+              </div>
+              <div className="h-6 w-16 bg-surface-container rounded" />
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-surface-container-lowest rounded-xl clinical-shadow">
+      <div className="p-4 border-b border-surface-container">
+        <h3 className="font-headline font-bold text-on-surface">Recommended Vaults</h3>
+        <p className="text-xs text-on-surface-variant">Highest APY across all chains · TVL &gt; $10M</p>
+      </div>
+      <div className="divide-y divide-surface-container">
+        {vaults.map((vault, i) => {
+          const apy = vault.analytics?.apy?.total
+          const tvl = Number(vault.analytics?.tvl?.usd ?? 0)
+          const chainName = vault._chainName ?? getChainName(vault.chainId)
+          return (
+            <button
+              key={vault.address + i}
+              onClick={() => onVaultClick(vault)}
+              className="w-full p-4 flex justify-between items-center hover:bg-surface-container-low transition-colors text-left group"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-surface-container flex items-center justify-center shrink-0 text-xs font-black text-on-surface-variant">
+                  {i + 1}
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-sm text-on-surface truncate group-hover:text-on-tertiary-container transition-colors">{vault.name}</p>
+                  <p className="text-xs text-on-surface-variant">
+                    {vault.protocol?.name} · <span className="font-semibold">{chainName}</span> · TVL {fmtTvl(tvl)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 ml-2">
+                <span className="font-black text-base text-on-tertiary-container">{fmtApy(apy)}</span>
+                <button
+                  onClick={e => { e.stopPropagation(); onDeposit(vault) }}
+                  className="px-3 py-1 rounded-full text-[10px] font-black bg-primary-container/10 text-primary-container hover:bg-primary-container hover:text-white transition-all border border-primary-container/20"
+                >
+                  Deposit
+                </button>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export default function DashboardPage() {
   const { address } = useAccount()
   const navigate = useNavigate()
   const [positions, setPositions] = useState([])
-  const [vaults, setVaults] = useState([])
-  const [bestCrossChain, setBestCrossChain] = useState(null)
-  const [diagnosis, setDiagnosis] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [hasPositions, setHasPositions] = useState(false)
-  const [cacheExpiresIn, setCacheExpiresIn] = useState(null)
   const [depositModal, setDepositModal] = useState(null)
   const [withdrawModal, setWithdrawModal] = useState(null)
+
+  // Vault detail modal state
+  const [detailVault, setDetailVault] = useState(null)
+  const [detailRiskData, setDetailRiskData] = useState(null)
+  const [detailLlamaPool, setDetailLlamaPool] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
     if (!address) return
     loadData()
   }, [address])
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const remaining = getCacheExpiresIn(CACHE_KEYS.allChainsBest)
-      setCacheExpiresIn(remaining)
-    }, 10000)
-    return () => clearInterval(interval)
-  }, [])
-
   async function loadData() {
     setLoading(true)
     setError(null)
     try {
-      const [userPositions, topVaults, bestVault] = await Promise.all([
-        getPortfolioPositions(address),
-        getVaults({ sortBy: 'apy', minTvlUsd: 1_000_000, limit: 10 }),
-        getBestVaultAcrossAllChains(),
-      ])
-
+      const userPositions = await getPortfolioPositions(address)
       const hasAny = userPositions && userPositions.length > 0
       setHasPositions(hasAny)
       setPositions(userPositions || [])
-      setVaults(topVaults)
-      setBestCrossChain(bestVault)
-
-      const remaining = getCacheExpiresIn(CACHE_KEYS.allChainsBest)
-      setCacheExpiresIn(remaining)
-
-      const aiText = await getDiagnosis({
-        positions: userPositions || [],
-        availableVaults: topVaults,
-        isNewUser: !hasAny,
-        bestCrossChainVault: bestVault,
-      })
-      setDiagnosis(aiText)
     } catch (err) {
       console.error('Dashboard load error:', err)
       setError(err.message)
-      setDiagnosis('Unable to load diagnosis.')
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleVaultClick(vault) {
+    setDetailVault(vault)
+    setDetailRiskData(null)
+    setDetailLlamaPool(null)
+    setDetailLoading(true)
+    try {
+      const pools = await fetchDefiLlamaPools()
+      const pool = matchVaultToPool(vault, pools)
+      setDetailLlamaPool(pool)
+      setDetailRiskData(pool ? computeRiskScore(vault, pool) : null)
+    } catch (e) {
+      console.warn('Risk data fetch failed:', e.message)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  function handleCompare(vault) {
+    // Navigate to compare page with vault pre-selected as Vault A
+    navigate('/compare', { state: { vaultA: vault } })
   }
 
   return (
@@ -98,11 +489,6 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {cacheExpiresIn != null && (
-            <span className="text-[10px] text-on-surface-variant font-medium">
-              Data refreshes in {formatTimeRemaining(cacheExpiresIn)}
-            </span>
-          )}
           {!loading && !error && (
             <span className="px-3 py-1 bg-surface-container-high rounded-full text-[10px] font-bold uppercase tracking-wider text-on-secondary-container">
               {positions.length} Active Vault{positions.length !== 1 ? 's' : ''}
@@ -138,19 +524,10 @@ export default function DashboardPage() {
           </section>
 
           <section className="col-span-12 lg:col-span-5 space-y-6">
-            <DiagnosisSummary diagnosis={diagnosis} loading={loading} />
-            {bestCrossChain && (
-              <BestCrossChainCard
-                vault={bestCrossChain}
-                onDeposit={() => setDepositModal(bestCrossChain)}
-              />
-            )}
-            {hasPositions && vaults.length > 0 && (
-              <AlternativesTable
-                vaults={vaults}
-                onDeposit={(vault) => setDepositModal(vault)}
-              />
-            )}
+            <RecommendedVaults
+              onDeposit={(vault) => setDepositModal(vault)}
+              onVaultClick={handleVaultClick}
+            />
           </section>
         </div>
       )}
@@ -171,6 +548,17 @@ export default function DashboardPage() {
           onSuccess={() => { setWithdrawModal(null); setTimeout(() => loadData(), 2000) }}
         />
       )}
+
+      {detailVault && (
+        <VaultDetailModal
+          vault={detailVault}
+          riskData={detailLoading ? null : detailRiskData}
+          llamaPool={detailLoading ? null : detailLlamaPool}
+          onClose={() => setDetailVault(null)}
+          onDeposit={(vault) => setDepositModal(vault)}
+          onCompare={handleCompare}
+        />
+      )}
     </AppShell>
   )
 }
@@ -182,9 +570,7 @@ function LoadingSkeleton() {
         {[1, 2, 3].map(i => <div key={i} className="h-40 bg-surface-container rounded-xl" />)}
       </div>
       <div className="col-span-5 space-y-4">
-        <div className="h-48 bg-surface-container rounded-xl" />
-        <div className="h-32 bg-surface-container rounded-xl" />
-        <div className="h-64 bg-surface-container rounded-xl" />
+        <div className="h-96 bg-surface-container rounded-xl" />
       </div>
     </div>
   )
@@ -198,25 +584,24 @@ function NoPositionsState({ onGoToVaults }) {
       </div>
       <h3 className="font-headline font-bold text-xl text-on-surface">No Active Vaults</h3>
       <p className="text-on-surface-variant text-sm">
-        You don't have any positions yet. See the Doctor's vault recommendations to get started.
+        You don't have any positions yet. Browse the vault recommendations on the right to get started.
       </p>
       <button
         onClick={onGoToVaults}
         className="px-6 py-3 bg-primary-container text-white rounded-full font-bold text-sm hover:opacity-90 transition-all"
       >
-        Deposit in a Vault
+        Explore Vaults
       </button>
     </div>
   )
 }
 
 function PositionCard({ position, onDeposit, onWithdraw }) {
-  const chainName    = getChainName(position.chainId)
+  const chainName = getChainName(position.chainId)
   const protocolName = position.protocolName ?? 'Unknown'
-  const vaultName    = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
-  const balanceUsd   = Number(position.balanceUsd || 0)
+  const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
+  const balanceUsd = Number(position.balanceUsd || 0)
 
-  // Use full _vaultData for the deposit/withdraw modal so it has all fields
   const vaultForModal = position._vaultData ?? {
     name: vaultName,
     protocol: { name: protocolName },
@@ -251,7 +636,6 @@ function PositionCard({ position, onDeposit, onWithdraw }) {
         </div>
       </div>
 
-      {/* Underlying tokens */}
       {position.underlyingTokens?.length > 0 && (
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           {position.underlyingTokens.map((t, i) => (
@@ -280,108 +664,6 @@ function PositionCard({ position, onDeposit, onWithdraw }) {
           <span className="material-symbols-outlined text-[14px]">remove_circle</span>
           Withdraw
         </button>
-      </div>
-    </div>
-  )
-}
-
-function DiagnosisSummary({ diagnosis, loading }) {
-  return (
-    <div className="bg-primary-container p-6 rounded-xl space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
-          <span className="material-symbols-outlined text-tertiary-fixed text-[18px]">psychology</span>
-        </div>
-        <div>
-          <h3 className="font-headline font-bold text-white">Diagnosis Summary</h3>
-          <p className="text-[10px] uppercase tracking-widest text-on-primary-container">AI Health Report</p>
-        </div>
-      </div>
-      <div className="text-sm text-slate-300 leading-relaxed">
-        {loading ? (
-          <div className="space-y-2 animate-pulse">
-            <div className="h-3 bg-white/10 rounded w-full" />
-            <div className="h-3 bg-white/10 rounded w-4/5" />
-            <div className="h-3 bg-white/10 rounded w-3/5" />
-          </div>
-        ) : (
-          diagnosis || 'No diagnosis available.'
-        )}
-      </div>
-    </div>
-  )
-}
-
-function BestCrossChainCard({ vault, onDeposit }) {
-  const apy = vault.analytics?.apy?.total != null
-    ? `${vault.analytics.apy.total.toFixed(2)}%` : 'N/A'
-  const chainName = vault._chainName ?? vault.network ?? getChainName(vault.chainId)
-  const tvlM = Number(vault.analytics?.tvl?.usd ?? 0) >= 1_000_000
-    ? `$${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M`
-    : `$${(Number(vault.analytics?.tvl?.usd ?? 0) / 1000).toFixed(0)}K`
-
-  return (
-    <div className="bg-tertiary-container/10 border border-on-tertiary-container/20 p-5 rounded-xl">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="material-symbols-outlined text-on-tertiary-container text-[18px]">verified</span>
-        <span className="text-[10px] font-black uppercase tracking-widest text-on-tertiary-container">
-          Best Vault Across All Chains
-        </span>
-      </div>
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <p className="font-headline font-bold text-on-surface text-base leading-tight">{vault.name}</p>
-          <p className="text-xs text-on-surface-variant mt-0.5">
-            {vault.protocol?.name} · {chainName} · TVL {tvlM}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-2xl font-headline font-black text-on-tertiary-container">{apy}</p>
-          <p className="text-[10px] text-on-surface-variant font-bold uppercase">APY</p>
-        </div>
-      </div>
-      <button
-        onClick={onDeposit}
-        className="w-full py-2 rounded-xl text-xs font-black bg-on-tertiary-container text-white hover:opacity-90 transition-all flex items-center justify-center gap-1.5"
-      >
-        <span className="material-symbols-outlined text-[14px]">add_circle</span>
-        Deposit in This Vault
-      </button>
-    </div>
-  )
-}
-
-function AlternativesTable({ vaults, onDeposit }) {
-  return (
-    <div className="bg-surface-container-lowest rounded-xl clinical-shadow">
-      <div className="p-4 border-b border-surface-container">
-        <h3 className="font-headline font-bold text-on-surface">Recommended Vaults</h3>
-        <p className="text-xs text-on-surface-variant">Highest verified APY · TVL &gt; $1M</p>
-      </div>
-      <div className="divide-y divide-surface-container">
-        {vaults.slice(0, 5).map((vault, i) => {
-          const apy = vault.analytics.apy.total != null
-            ? `${vault.analytics.apy.total.toFixed(2)}%` : 'N/A'
-          return (
-            <div key={i} className="p-4 flex justify-between items-center hover:bg-surface-container-low transition-colors">
-              <div>
-                <p className="font-bold text-sm text-on-surface">{vault.name}</p>
-                <p className="text-xs text-on-surface-variant">
-                  {vault.protocol.name} · TVL ${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-on-tertiary-container">{apy}</span>
-                <button
-                  onClick={() => onDeposit(vault)}
-                  className="px-3 py-1 rounded-full text-[10px] font-black bg-primary-container/10 text-primary-container hover:bg-primary-container hover:text-white transition-all border border-primary-container/20"
-                >
-                  Deposit
-                </button>
-              </div>
-            </div>
-          )
-        })}
       </div>
     </div>
   )
