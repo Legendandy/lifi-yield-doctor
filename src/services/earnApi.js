@@ -20,23 +20,32 @@ async function safeFetch(url) {
 }
 
 const ABSOLUTE_MAX_APY = 500
-const MIN_TVL_FOR_DISPLAY = 10_000
+const MIN_TVL_HARD = 1_000_000   // $1M — vaults below this are always excluded
+const MIN_APY_HARD = 0.5         // 0.5% — vaults at or below this are always excluded
+const MIN_APY_FOR_LOW_TVL = 1.0  // if TVL < $1M, need at least 1% APY (but MIN_TVL_HARD kills these anyway)
 
 export function isVaultSane(vault) {
-  const apy = vault?.analytics?.apy?.total
-  const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
+  const apy  = vault?.analytics?.apy?.total
+  const tvl  = Number(vault?.analytics?.tvl?.usd ?? 0)
   const apy30d = vault?.analytics?.apy30d
 
+  // Must have a valid numeric APY
   if (apy == null || typeof apy !== 'number') return false
   if (apy < 0) return false
   if (apy > ABSOLUTE_MAX_APY) return false
 
+  // Exclude vaults with APY ≤ 0.5% regardless of TVL
+  if (apy <= MIN_APY_HARD) return false
+
+  // Exclude vaults with TVL < $1M regardless of APY
+  if (tvl < MIN_TVL_HARD) return false
+
+  // Sanity check on 30d vs current (extreme outliers)
   if (apy30d != null && apy30d > 0) {
     const ratio = apy / apy30d
     if (ratio > 10 || ratio < 0.05) return false
   }
 
-  if (tvl < MIN_TVL_FOR_DISPLAY) return false
   return true
 }
 
@@ -58,8 +67,6 @@ export function computeVaultRankScore(vault) {
 }
 
 // Calls GET /v1/earn/vaults/:chainId/:address
-// This is the key function — takes chainId and vault address from a position
-// and returns the full vault object including analytics.apy.total, apy30d, tvl, etc.
 export async function getVaultByAddress(chainId, address) {
   if (!chainId || !address) return null
   const cacheKey = `vault:single:${chainId}:${address.toLowerCase()}`
@@ -78,10 +85,6 @@ export async function getVaultByAddress(chainId, address) {
   }
 }
 
-// GET /v1/earn/portfolio/:userAddress/positions returns positions WITHOUT apy.
-// Each position has chainId and asset.address (the vault contract address).
-// We call getVaultByAddress(chainId, asset.address) for each position to get
-// the full vault data including apy, apy30d, tvl, etc.
 export async function getPortfolioPositions(userAddress) {
   if (!userAddress) return []
 
@@ -98,15 +101,12 @@ export async function getPortfolioPositions(userAddress) {
 
   const enriched = await Promise.allSettled(
     rawPositions.map(async (pos) => {
-      // asset.address is the vault contract address
       const vaultAddress = pos.asset?.address
       if (!vaultAddress || !pos.chainId) return pos
 
-      // Fetch full vault details using chainId + vault address
       const vaultData = await getVaultByAddress(pos.chainId, vaultAddress)
 
       if (!vaultData) {
-        // Could not fetch vault — return position with nulls
         return {
           ...pos,
           _vaultData: null,
@@ -123,11 +123,9 @@ export async function getPortfolioPositions(userAddress) {
         }
       }
 
-      // Merge full vault data into the position
       return {
         ...pos,
         _vaultData: vaultData,
-        // APY fields from the vault detail endpoint
         apy: vaultData.analytics?.apy?.total ?? null,
         apy30d: vaultData.analytics?.apy30d ?? null,
         apy7d: vaultData.analytics?.apy7d ?? null,
@@ -226,7 +224,7 @@ export async function getVaultsPaged({ chainId, pageSize = 20, pageIndex = 0 } =
 }
 
 export async function getVaults({
-  chainId, asset, protocol, sortBy = 'apy', minTvlUsd = 100_000, limit = 20,
+  chainId, asset, protocol, sortBy = 'apy', minTvlUsd = 1_000_000, limit = 20,
 } = {}) {
   const params = new URLSearchParams()
   if (chainId) params.set('chainId', String(chainId))

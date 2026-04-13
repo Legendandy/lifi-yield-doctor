@@ -38,9 +38,6 @@ function formatTimeRemaining(ms) {
 }
 
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
-// Root is `inline-block` so it hugs the badge exactly — no gap between the
-// badge edge and the hover zone. The tooltip bubble sits above (or below) in
-// a z-[600] absolutely-positioned span so it never clips content beneath it.
 function Tooltip({ text, children, position = 'top' }) {
   const posMap = {
     top:    'bottom-full left-1/2 -translate-x-1/2 mb-1.5',
@@ -51,12 +48,8 @@ function Tooltip({ text, children, position = 'top' }) {
   return (
     <span className="relative inline-block group/tip">
       {children}
-      <span
-        className={`pointer-events-none absolute ${posMap[position]} z-[600]
-          opacity-0 group-hover/tip:opacity-100 transition-opacity duration-150`}
-      >
-        <span className="block bg-[#131b2e] text-white text-[10px] font-semibold
-          px-2.5 py-1.5 rounded-lg shadow-xl leading-snug max-w-[200px] whitespace-normal text-center">
+      <span className={`pointer-events-none absolute ${posMap[position]} z-[600] opacity-0 group-hover/tip:opacity-100 transition-opacity duration-150`}>
+        <span className="block bg-[#131b2e] text-white text-[10px] font-semibold px-2.5 py-1.5 rounded-lg shadow-xl leading-snug max-w-[200px] whitespace-normal text-center">
           {text}
         </span>
       </span>
@@ -64,9 +57,6 @@ function Tooltip({ text, children, position = 'top' }) {
   )
 }
 
-// ─── Badge ────────────────────────────────────────────────────────────────────
-// Always inline-block so Tooltip wraps it at exactly the right width.
-// Padding / colours are passed via className — keep it simple.
 function Badge({ children, className = '' }) {
   return (
     <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold leading-tight ${className}`}>
@@ -83,10 +73,7 @@ function AppInfoModal({ onClose }) {
       <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-headline font-extrabold text-lg text-on-surface">APY Prediction Probability</h3>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors"
-          >
+          <button onClick={onClose} className="w-7 h-7 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center transition-colors">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">close</span>
           </button>
         </div>
@@ -111,7 +98,7 @@ function AppInfoModal({ onClose }) {
           </div>
           <p>
             The percentage shown (e.g. <span className="font-bold text-on-surface">72%</span>) is the model's
-            confidence in that direction. Higher confidence means a stronger signal.
+            confidence in that direction.
           </p>
           <p className="text-[11px] text-outline bg-surface-container p-2 rounded-lg">
             This is a probabilistic model estimate, not a guarantee. Always do your own research.
@@ -126,11 +113,9 @@ function AppInfoModal({ onClose }) {
 function RiskBadge({ riskData, size = 'sm' }) {
   if (!riskData) {
     return (
-      <span
-        className={`inline-flex items-center justify-center font-black rounded-lg border
-          ${size === 'lg' ? 'w-10 h-10 text-base' : 'w-7 h-7 text-xs'}
-          bg-surface-container border-surface-container-high text-on-surface-variant`}
-      >
+      <span className={`inline-flex items-center justify-center font-black rounded-lg border
+        ${size === 'lg' ? 'w-10 h-10 text-base' : 'w-7 h-7 text-xs'}
+        bg-surface-container border-surface-container-high text-on-surface-variant`}>
         —
       </span>
     )
@@ -176,10 +161,7 @@ function PredictionCell({ predictions }) {
 
   return (
     <span className="inline-flex flex-col gap-0.5">
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-black w-fit"
-        style={{ color, background: bg }}
-      >
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-black w-fit" style={{ color, background: bg }}>
         {arrow} {pct}%
       </span>
       {binnedConfidence && (
@@ -200,13 +182,11 @@ function DoctorsChoiceCard({ vault, riskData, chainName, onDeposit }) {
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow overflow-hidden border border-surface-container mb-8">
       <div className="p-8 space-y-5">
-        {/* Header row */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="material-symbols-outlined text-on-tertiary-container text-lg">verified</span>
           <span className="text-xs font-black uppercase tracking-widest text-on-tertiary-container">
             Doctor's Choice — {chainName}
           </span>
-         
 
           {isComposable ? (
             <Tooltip text="Deposits are supported via Composer" position="bottom">
@@ -296,112 +276,137 @@ function FilterBar({ vaults, filters, onFiltersChange }) {
   const protocols = [...new Set(vaults.map(v => v.protocol?.name).filter(Boolean))].sort()
 
   return (
-    <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-surface-container-lowest rounded-2xl border border-surface-container clinical-shadow">
-      <div className="flex items-center gap-2">
-        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Protocol</label>
-        <select
-          value={filters.protocol}
-          onChange={e => onFiltersChange({ ...filters, protocol: e.target.value })}
-          className="px-3 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30 min-w-[130px]"
-        >
-          <option value="">All Protocols</option>
-          {protocols.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">APY</label>
-        <div className="flex items-center gap-1">
+    <div className="space-y-3 mb-6">
+      {/* Search row */}
+      <div className="flex items-center gap-3 p-4 bg-surface-container-lowest rounded-2xl border border-surface-container clinical-shadow">
+        <div className="relative flex-1">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-[18px] text-on-surface-variant">search</span>
           <input
-            type="number" min="0" placeholder="Min %"
-            value={filters.apyMin}
-            onChange={e => onFiltersChange({ ...filters, apyMin: e.target.value })}
-            className="w-20 px-2 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
+            type="text"
+            value={filters.search}
+            onChange={e => onFiltersChange({ ...filters, search: e.target.value })}
+            placeholder="Search vault name, protocol, or token…"
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-surface-container-high bg-surface-container-low text-sm font-medium text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30 placeholder:text-on-surface-variant/60"
           />
-          <span className="text-on-surface-variant text-xs font-bold">–</span>
-          <input
-            type="number" min="0" placeholder="Max %"
-            value={filters.apyMax}
-            onChange={e => onFiltersChange({ ...filters, apyMax: e.target.value })}
-            className="w-20 px-2 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Sort</label>
-        <div className="flex rounded-xl overflow-hidden border border-surface-container-high">
-          {[{ value: 'desc', label: '↓ APY' }, { value: 'asc', label: '↑ APY' }].map(opt => (
+          {filters.search && (
             <button
-              key={opt.value}
-              onClick={() => onFiltersChange({ ...filters, apySort: opt.value })}
-              className={`px-3 py-1.5 text-xs font-bold transition-colors ${
-                filters.apySort === opt.value
-                  ? 'bg-primary-container text-white'
-                  : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'
-              }`}
+              onClick={() => onFiltersChange({ ...filters, search: '' })}
+              className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-surface-container-high hover:bg-surface-container-highest flex items-center justify-center transition-colors"
             >
-              {opt.label}
+              <span className="material-symbols-outlined text-[12px] text-on-surface-variant">close</span>
             </button>
-          ))}
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Min TVL</label>
-        <select
-          value={filters.minTvl}
-          onChange={e => onFiltersChange({ ...filters, minTvl: Number(e.target.value) })}
-          className="px-3 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
-        >
-          <option value={0}>Any TVL</option>
-          <option value={100_000}>$100K+</option>
-          <option value={1_000_000}>$1M+</option>
-          <option value={10_000_000}>$10M+</option>
-          <option value={50_000_000}>$50M+</option>
-          <option value={100_000_000}>$100M+</option>
-          <option value={300_000_000}>$300M+</option>
-          <option value={500_000_000}>$500M+</option>
-          <option value={700_000_000}>$700M+</option>
-          <option value={900_000_000}>$900M+</option>
-        </select>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Risk</label>
-        <div className="flex gap-1">
-          {['', 'A', 'B', 'C', 'D'].map(g => (
-            <button
-              key={g}
-              onClick={() => onFiltersChange({ ...filters, grade: g })}
-              className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all border ${
-                filters.grade === g && g === ''
-                  ? 'bg-primary-container text-white border-primary-container'
-                  : filters.grade === g
-                    ? 'border-transparent'
-                    : 'border-surface-container-high text-on-surface-variant hover:border-primary-container/40'
-              }`}
-              style={filters.grade === g && g !== '' ? {
-                color: GRADE_CONFIG[g].color,
-                background: GRADE_CONFIG[g].bg,
-                borderColor: GRADE_CONFIG[g].border,
-              } : {}}
-            >
-              {g || 'All'}
-            </button>
-          ))}
+      {/* Filters row */}
+      <div className="flex flex-wrap items-center gap-3 p-4 bg-surface-container-lowest rounded-2xl border border-surface-container clinical-shadow">
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Protocol</label>
+          <select
+            value={filters.protocol}
+            onChange={e => onFiltersChange({ ...filters, protocol: e.target.value })}
+            className="px-3 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30 min-w-[130px]"
+          >
+            <option value="">All Protocols</option>
+            {protocols.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
         </div>
-      </div>
 
-      {(filters.protocol || filters.minTvl > 0 || filters.grade || filters.apyMin || filters.apyMax) && (
-        <button
-          onClick={() => onFiltersChange({ protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })}
-          className="ml-auto flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface transition-colors font-bold"
-        >
-          <span className="material-symbols-outlined text-[14px]">close</span>
-          Clear
-        </button>
-      )}
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">APY</label>
+          <div className="flex items-center gap-1">
+            <input
+              type="number" min="0" placeholder="Min %"
+              value={filters.apyMin}
+              onChange={e => onFiltersChange({ ...filters, apyMin: e.target.value })}
+              className="w-20 px-2 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
+            />
+            <span className="text-on-surface-variant text-xs font-bold">–</span>
+            <input
+              type="number" min="0" placeholder="Max %"
+              value={filters.apyMax}
+              onChange={e => onFiltersChange({ ...filters, apyMax: e.target.value })}
+              className="w-20 px-2 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Sort</label>
+          <div className="flex rounded-xl overflow-hidden border border-surface-container-high">
+            {[{ value: 'desc', label: '↓ APY' }, { value: 'asc', label: '↑ APY' }].map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => onFiltersChange({ ...filters, apySort: opt.value })}
+                className={`px-3 py-1.5 text-xs font-bold transition-colors ${
+                  filters.apySort === opt.value
+                    ? 'bg-primary-container text-white'
+                    : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Min TVL</label>
+          <select
+            value={filters.minTvl}
+            onChange={e => onFiltersChange({ ...filters, minTvl: Number(e.target.value) })}
+            className="px-3 py-1.5 rounded-xl border border-surface-container-high bg-surface-container-low text-xs font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/30"
+          >
+            <option value={0}>Any TVL</option>
+            <option value={1_000_000}>$1M+</option>
+            <option value={5_000_000}>$5M+</option>
+            <option value={10_000_000}>$10M+</option>
+            <option value={50_000_000}>$50M+</option>
+            <option value={100_000_000}>$100M+</option>
+            <option value={300_000_000}>$300M+</option>
+            <option value={500_000_000}>$500M+</option>
+            <option value={700_000_000}>$700M+</option>
+            <option value={900_000_000}>$900M+</option>
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Risk</label>
+          <div className="flex gap-1">
+            {['', 'A', 'B', 'C', 'D'].map(g => (
+              <button
+                key={g}
+                onClick={() => onFiltersChange({ ...filters, grade: g })}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all border ${
+                  filters.grade === g && g === ''
+                    ? 'bg-primary-container text-white border-primary-container'
+                    : filters.grade === g
+                      ? 'border-transparent'
+                      : 'border-surface-container-high text-on-surface-variant hover:border-primary-container/40'
+                }`}
+                style={filters.grade === g && g !== '' ? {
+                  color: GRADE_CONFIG[g].color,
+                  background: GRADE_CONFIG[g].bg,
+                  borderColor: GRADE_CONFIG[g].border,
+                } : {}}
+              >
+                {g || 'All'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {(filters.protocol || filters.minTvl > 0 || filters.grade || filters.apyMin || filters.apyMax) && (
+          <button
+            onClick={() => onFiltersChange({ ...filters, protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })}
+            className="ml-auto flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface transition-colors font-bold"
+          >
+            <span className="material-symbols-outlined text-[14px]">close</span>
+            Clear filters
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -414,7 +419,6 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow">
       {showAppInfo && <AppInfoModal onClose={() => setShowAppInfo(false)} />}
 
-      {/* Header */}
       <div className="px-6 py-4 border-b border-surface-container flex justify-between items-center bg-surface-container-low rounded-t-2xl">
         <div>
           <h3 className="font-headline font-bold text-xl text-on-surface">All Vaults</h3>
@@ -425,7 +429,6 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
         </span>
       </div>
 
-      {/* Column headers */}
       <div
         className="px-6 py-3 grid gap-3 border-b border-surface-container bg-surface-container-low/60 text-[10px] uppercase tracking-widest font-black text-on-surface-variant"
         style={{ gridTemplateColumns: '32px 1fr 90px 90px 100px 110px 100px 90px' }}
@@ -448,7 +451,6 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
         <div className="text-right">Action</div>
       </div>
 
-      {/* Rows */}
       <div className="divide-y divide-surface-container">
         {vaults.map((vault, i) => {
           const key          = vault.slug ?? vault.address
@@ -472,12 +474,10 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
                 ${isBest ? 'bg-tertiary-container/5' : ''}`}
               style={{ gridTemplateColumns: '32px 1fr 90px 90px 100px 110px 100px 90px' }}
             >
-              {/* Rank */}
               <div className="text-center">
                 <span className="text-sm font-black text-on-surface-variant">{pageIndex * PAGE_SIZE + i + 1}</span>
               </div>
 
-              {/* Vault name + tags */}
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-xl bg-surface-container flex items-center justify-center shrink-0">
                   <span className="material-symbols-outlined text-on-surface-variant text-[16px]">account_balance</span>
@@ -495,7 +495,6 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
                     {vault.protocol?.name} · {vault.network ?? `Chain ${vault.chainId}`}
                   </p>
                   <div className="flex gap-1 mt-1 flex-wrap items-center">
-                    {/* Token symbols — self-explanatory, no tooltip needed */}
                     {vault.underlyingTokens?.slice(0, 2).map((t, ti) => (
                       <Badge key={ti} className="bg-surface-container text-on-surface-variant">
                         {t.symbol}
@@ -551,34 +550,28 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
                 </div>
               </div>
 
-              {/* Current APY */}
               <div className="text-right">
                 <p className={`font-headline font-black text-base ${isBest ? 'text-on-tertiary-container' : 'text-on-surface'}`}>
                   {fmtApy(apy)}
                 </p>
               </div>
 
-              {/* 30d avg */}
               <div className="text-right">
                 <p className="text-sm font-medium text-on-surface-variant">{apy30d != null ? fmtApy(apy30d) : '—'}</p>
               </div>
 
-              {/* TVL */}
               <div className="text-right">
                 <p className="font-bold text-sm text-on-surface">{fmtTvl(tvlRaw)}</p>
               </div>
 
-              {/* APP prediction */}
               <div className="flex justify-center">
                 <PredictionCell predictions={predictions} />
               </div>
 
-              {/* Risk Grade */}
               <div className="flex justify-center">
                 <RiskBadge riskData={riskData} />
               </div>
 
-              {/* Action */}
               <div className="flex justify-end">
                 <button
                   onClick={() => onDeposit(vault)}
@@ -596,7 +589,6 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
         })}
       </div>
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div className="p-5 border-t border-surface-container flex items-center justify-between">
           <button
@@ -645,7 +637,6 @@ function VaultTable({ vaults, riskMap, llamaPoolMap, doctorsChoiceAddress, onDep
   )
 }
 
-// ─── Loading Skeleton ─────────────────────────────────────────────────────────
 function LoadingSkeleton() {
   return (
     <div className="animate-pulse space-y-4">
@@ -677,6 +668,7 @@ export default function VaultPage() {
   const [depositModal, setDepositModal]     = useState(null)
 
   const [filters, setFilters] = useState({
+    search:   '',
     protocol: '',
     apySort:  'desc',
     minTvl:   0,
@@ -719,7 +711,7 @@ export default function VaultPage() {
 
   useEffect(() => {
     if (!allVaults.length || !llamaPools.length) return
-    const newRiskMap     = new Map()
+    const newRiskMap      = new Map()
     const newLlamaPoolMap = new Map()
     for (const vault of allVaults) {
       const key  = vault.slug ?? vault.address
@@ -741,6 +733,14 @@ export default function VaultPage() {
   }, [selectedChain])
 
   const filteredVaults = allVaults.filter(vault => {
+    // Search: vault name, protocol, token symbols
+    if (filters.search) {
+      const q = filters.search.toLowerCase()
+      const nameMatch     = vault.name.toLowerCase().includes(q)
+      const protoMatch    = vault.protocol?.name.toLowerCase().includes(q)
+      const tokenMatch    = vault.underlyingTokens?.some(t => t.symbol.toLowerCase().includes(q))
+      if (!nameMatch && !protoMatch && !tokenMatch) return false
+    }
     if (filters.protocol && vault.protocol?.name !== filters.protocol) return false
     const tvl = Number(vault.analytics?.tvl?.usd ?? 0)
     if (tvl < filters.minTvl) return false
@@ -845,7 +845,7 @@ export default function VaultPage() {
               <span className="material-symbols-outlined text-4xl block mb-3">filter_list_off</span>
               No vaults match your filters.
               <button
-                onClick={() => setFilters({ protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })}
+                onClick={() => setFilters({ search: '', protocol: '', apySort: 'desc', minTvl: 0, grade: '', apyMin: '', apyMax: '' })}
                 className="block mx-auto mt-3 text-sm font-bold text-primary-container hover:underline"
               >
                 Clear filters

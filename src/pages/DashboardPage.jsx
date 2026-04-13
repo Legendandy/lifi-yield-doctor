@@ -1,9 +1,4 @@
 // src/pages/DashboardPage.jsx
-// APY from API is already a percentage (e.g. 3.8 = 3.8%) — NO * 100 anywhere
-// Portfolio positions don't include APY. We call GET /v1/earn/vaults/:chainId/:address
-// (via getVaultByAddress in earnApi) for each position to get the full vault data.
-// The result is stored on position._vaultData, and position.apy / position.apy30d
-// are set from vaultData.analytics.apy.total / vaultData.analytics.apy30d.
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
@@ -19,13 +14,6 @@ const CHAIN_NAMES = Object.fromEntries(SUPPORTED_CHAINS.map(c => [c.id, c.name])
 function getChainName(chainId) {
   if (!chainId) return 'Unknown'
   return CHAIN_NAMES[chainId] ?? `Chain ${chainId}`
-}
-
-function getHealthTag(currentApy, bestAvailableApy) {
-  if (currentApy == null || bestAvailableApy == null) return { label: 'Unknown', color: '#76777d' }
-  const isUnderperforming = bestAvailableApy > currentApy * 1.2
-  if (isUnderperforming) return { label: '🔴 Underperforming', color: '#ef4444' }
-  return { label: '🟢 Healthy', color: '#22c55e' }
 }
 
 function formatTimeRemaining(ms) {
@@ -69,7 +57,7 @@ export default function DashboardPage() {
     try {
       const [userPositions, topVaults, bestVault] = await Promise.all([
         getPortfolioPositions(address),
-        getVaults({ sortBy: 'apy', minTvlUsd: 500_000, limit: 10 }),
+        getVaults({ sortBy: 'apy', minTvlUsd: 1_000_000, limit: 10 }),
         getBestVaultAcrossAllChains(),
       ])
 
@@ -142,7 +130,6 @@ export default function DashboardPage() {
                 <PositionCard
                   key={i}
                   position={pos}
-                  bestApy={vaults[0]?.analytics?.apy?.total ?? 0}
                   onDeposit={(vault) => setDepositModal(vault)}
                   onWithdraw={(vault, position) => setWithdrawModal({ vault, position })}
                 />
@@ -223,14 +210,11 @@ function NoPositionsState({ onGoToVaults }) {
   )
 }
 
-function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
-  // position.apy and position.apy30d are set from vaultData.analytics in getPortfolioPositions
-  const currentApy = position.apy
-  const tag = getHealthTag(currentApy, bestApy)
-  const apyDisplay = currentApy != null ? `${currentApy.toFixed(2)}%` : 'N/A'
-  const chainName = getChainName(position.chainId)
+function PositionCard({ position, onDeposit, onWithdraw }) {
+  const chainName    = getChainName(position.chainId)
   const protocolName = position.protocolName ?? 'Unknown'
-  const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
+  const vaultName    = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
+  const balanceUsd   = Number(position.balanceUsd || 0)
 
   // Use full _vaultData for the deposit/withdraw modal so it has all fields
   const vaultForModal = position._vaultData ?? {
@@ -240,8 +224,8 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
     chainId: position.chainId,
     address: position.vaultAddress ?? position.asset?.address ?? '',
     analytics: {
-      apy: { total: currentApy },
-      apy30d: position.apy30d ?? null,
+      apy: { total: null },
+      apy30d: null,
       tvl: { usd: position.tvlUsd ?? 0 },
     },
     underlyingTokens: position.underlyingTokens ?? (position.asset ? [position.asset] : []),
@@ -260,42 +244,26 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
           </div>
         </div>
         <div className="text-right">
-          <span className="block text-2xl font-headline font-black text-on-surface">{apyDisplay}</span>
-          <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">Current APY</span>
+          <span className="block text-2xl font-headline font-black text-on-surface">
+            ${balanceUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </span>
+          <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">Balance (USD)</span>
         </div>
       </div>
 
-      {position.apy30d != null && (
-        <div className="flex gap-4 mb-4 p-3 bg-surface-container rounded-xl">
-          <div className="flex-1 text-center border-r border-surface-container-high">
-            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">30D APY</p>
-            <p className="font-bold text-sm text-on-tertiary-container mt-0.5">
-              {`${position.apy30d.toFixed(2)}%`}
-            </p>
-          </div>
-          <div className="flex-1 text-center">
-            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">TVL</p>
-            <p className="font-bold text-sm text-on-surface mt-0.5">
-              {position.tvlUsd >= 1_000_000
-                ? `$${(position.tvlUsd / 1e6).toFixed(1)}M`
-                : position.tvlUsd >= 1_000
-                  ? `$${(position.tvlUsd / 1e3).toFixed(0)}K`
-                  : `$${position.tvlUsd?.toFixed(0) ?? '0'}`}
-            </p>
-          </div>
+      {/* Underlying tokens */}
+      {position.underlyingTokens?.length > 0 && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          {position.underlyingTokens.map((t, i) => (
+            <span key={i} className="flex items-center gap-1 px-2.5 py-1 bg-surface-container rounded-full text-xs font-bold text-on-surface-variant">
+              {t.logoURI && (
+                <img src={t.logoURI} alt={t.symbol} className="w-3.5 h-3.5 rounded-full" onError={e => { e.target.style.display = 'none' }} />
+              )}
+              {t.symbol}
+            </span>
+          ))}
         </div>
       )}
-
-      <div className="grid grid-cols-2 gap-6 mb-4">
-        <div>
-          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Balance</span>
-          <span className="text-lg font-bold text-on-surface">${Number(position.balanceUsd || 0).toLocaleString()}</span>
-        </div>
-        <div>
-          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Health</span>
-          <span className="text-sm font-bold" style={{ color: tag.color }}>{tag.label}</span>
-        </div>
-      </div>
 
       <div className="flex gap-2 pt-2 border-t border-surface-container">
         <button
@@ -388,7 +356,7 @@ function AlternativesTable({ vaults, onDeposit }) {
     <div className="bg-surface-container-lowest rounded-xl clinical-shadow">
       <div className="p-4 border-b border-surface-container">
         <h3 className="font-headline font-bold text-on-surface">Recommended Vaults</h3>
-        <p className="text-xs text-on-surface-variant">Highest verified APY · TVL &gt; $500k</p>
+        <p className="text-xs text-on-surface-variant">Highest verified APY · TVL &gt; $1M</p>
       </div>
       <div className="divide-y divide-surface-container">
         {vaults.slice(0, 5).map((vault, i) => {

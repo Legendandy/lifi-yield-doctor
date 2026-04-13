@@ -1,18 +1,9 @@
 // src/pages/CompareApyPage.jsx
 // APY from API is already a percentage (e.g. 3.8 = 3.8%) — NO * 100 anywhere
-//
-// For positions selected from portfolio: they already have apy, apy30d, tvlUsd
-// set on them from getPortfolioPositions (which calls getVaultByAddress internally).
-//
-// For vaults selected from the chain list: the list endpoint already returns
-// analytics.apy.total, analytics.apy30d, analytics.tvl.usd — use them directly.
-//
-// Risk score: computed from DeFiLlama pool matching (same as VaultPage).
 import { useState, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
 import {
-  getPortfolioPositions,
   getSupportedChains,
   getVaultsForChain,
   getVaultByAddress,
@@ -45,42 +36,8 @@ function fmtTvl(usd) {
   return n > 0 ? `$${n.toFixed(0)}` : '—'
 }
 
-// Build a normalised vault object from a portfolio position.
-// The position already has apy, apy30d, tvlUsd set by getPortfolioPositions
-// (which called getVaultByAddress). If _vaultData exists, use it directly.
-function positionToVault(pos) {
-  if (pos._vaultData) {
-    return {
-      ...pos._vaultData,
-      network: pos._vaultData.network ?? resolveChainName(pos._vaultData.chainId),
-      _isPosition: true,
-      _positionBalanceUsd: Number(pos.balanceUsd ?? 0),
-    }
-  }
-  // Fallback: build from what the position already has
-  return {
-    name: pos.vaultName ?? `${pos.asset?.symbol ?? 'Unknown'} Vault`,
-    protocol: { name: pos.protocolName ?? 'Unknown' },
-    network: resolveChainName(pos.chainId),
-    chainId: pos.chainId,
-    address: pos.vaultAddress ?? pos.asset?.address ?? '',
-    analytics: {
-      apy: { total: pos.apy ?? null },
-      apy30d: pos.apy30d ?? null,
-      tvl: { usd: pos.tvlUsd ?? 0 },
-    },
-    underlyingTokens: pos.underlyingTokens ?? (pos.asset ? [pos.asset] : []),
-    _isPosition: true,
-    _positionBalanceUsd: Number(pos.balanceUsd ?? 0),
-  }
-}
-
-// For a vault from the list endpoint, try fetching the single-vault endpoint
-// to get apy30d if it's missing. The list already has apy.total and tvl.
 async function ensureFullVaultData(vault) {
-  // If we already have apy30d, nothing more to fetch
   if (vault.analytics?.apy30d != null) return vault
-  // Try to fetch the single vault endpoint for richer data
   if (vault.chainId && vault.address) {
     try {
       const full = await getVaultByAddress(vault.chainId, vault.address)
@@ -96,7 +53,6 @@ async function ensureFullVaultData(vault) {
   return vault
 }
 
-// Risk grade badge
 function RiskBadge({ riskData, size = 'sm' }) {
   if (!riskData) {
     return (
@@ -137,48 +93,50 @@ function SelectorHeader({ label }) {
   )
 }
 
-function VaultSelector({ label, address, onSelect }) {
-  const [positions, setPositions]         = useState([])
+// VaultSelector — always starts at chain picker, no portfolio step
+function VaultSelector({ label, onSelect }) {
   const [chains, setChains]               = useState([])
   const [selectedChain, setSelectedChain] = useState(null)
   const [vaults, setVaults]               = useState([])
-  const [step, setStep]                   = useState('loading')
+  const [step, setStep]                   = useState('loading-chains')
   const [loading, setLoading]             = useState(false)
   const [enriching, setEnriching]         = useState(false)
   const [error, setError]                 = useState(null)
   const [search, setSearch]               = useState('')
 
   useEffect(() => {
-    if (!address) { setStep('pick-chain'); loadChains(); return }
-    setStep('loading')
-    getPortfolioPositions(address)
-      .then(pos => {
-        if (pos && pos.length > 0) { setPositions(pos); setStep('pick-position') }
-        else { setStep('pick-chain'); loadChains() }
-      })
-      .catch(() => { setStep('pick-chain'); loadChains() })
-  }, [address])
+    loadChains()
+  }, [])
 
   async function loadChains() {
-    try { setChains(await getSupportedChains()) }
-    catch { setError('Failed to load chains') }
+    setStep('loading-chains')
+    try {
+      const data = await getSupportedChains()
+      setChains(data)
+      setStep('pick-chain')
+    } catch {
+      setError('Failed to load chains')
+      setStep('pick-chain')
+    }
   }
 
   async function handleChainSelect(chain) {
-    setSelectedChain(chain); setLoading(true); setError(null); setVaults([]); setSearch('')
-    try { setVaults(await getVaultsForChain({ chainId: chain.chainId, maxPages: 5 })); setStep('pick-vault') }
-    catch (e) { setError('Failed to load vaults: ' + e.message) }
-    finally { setLoading(false) }
-  }
-
-  async function handlePositionSelect(pos) {
-    // Position already has full data from getPortfolioPositions
-    onSelect(positionToVault(pos))
-    setStep('done')
+    setSelectedChain(chain)
+    setLoading(true)
+    setError(null)
+    setVaults([])
+    setSearch('')
+    try {
+      setVaults(await getVaultsForChain({ chainId: chain.chainId, maxPages: 5 }))
+      setStep('pick-vault')
+    } catch (e) {
+      setError('Failed to load vaults: ' + e.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function handleVaultSelect(vault) {
-    // Ensure we have apy30d — fetch single vault if needed
     setEnriching(true)
     try {
       const full = await ensureFullVaultData({
@@ -200,12 +158,12 @@ function VaultSelector({ label, address, onSelect }) {
 
   const cardBase = 'bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container p-6 space-y-4'
 
-  if (step === 'loading' || enriching) return (
+  if (step === 'loading-chains' || enriching) return (
     <div className={cardBase}>
       <SelectorHeader label={label} />
       <div className="flex flex-col items-center gap-3 py-6">
         <span className="material-symbols-outlined text-on-surface-variant text-3xl animate-spin">progress_activity</span>
-        <p className="text-xs text-on-surface-variant">{enriching ? 'Loading vault data...' : 'Loading positions...'}</p>
+        <p className="text-xs text-on-surface-variant">{enriching ? 'Loading vault data...' : 'Loading chains...'}</p>
       </div>
     </div>
   )
@@ -216,36 +174,6 @@ function VaultSelector({ label, address, onSelect }) {
     <div className={cardBase}>
       <SelectorHeader label={label} />
       {error && <p className="text-xs text-on-error-container bg-error-container/20 px-3 py-2 rounded-lg">{error}</p>}
-
-      {step === 'pick-position' && (
-        <div className="space-y-3">
-          <p className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">Your Active Vaults</p>
-          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-            {positions.map((pos, i) => (
-              <button key={i} onClick={() => handlePositionSelect(pos)}
-                className="w-full flex items-center justify-between p-3 rounded-xl bg-surface-container hover:bg-secondary-container/40 transition-all text-left group">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-primary-container/10 flex items-center justify-center">
-                    <span className="material-symbols-outlined text-primary-container text-[16px]">account_balance</span>
-                  </div>
-                  <div>
-                    <p className="font-bold text-sm text-on-surface">{pos.vaultName ?? `${pos.asset?.symbol ?? 'Unknown'} Vault`}</p>
-                    <p className="text-[10px] text-on-surface-variant">{pos.protocolName ?? 'Unknown'} · {resolveChainName(pos.chainId)}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="font-black text-sm text-on-tertiary-container">{fmt(pos.apy)}</p>
-                  {pos.apy30d != null && <p className="text-[9px] text-on-surface-variant">30d: {fmt(pos.apy30d)}</p>}
-                </div>
-              </button>
-            ))}
-          </div>
-          <button onClick={() => { setStep('pick-chain'); loadChains() }}
-            className="w-full py-2.5 rounded-xl border-2 border-dashed border-surface-container-high text-xs font-bold text-on-surface-variant hover:border-primary-container hover:text-on-surface transition-all">
-            Or pick from all chains →
-          </button>
-        </div>
-      )}
 
       {step === 'pick-chain' && (
         <div className="space-y-3">
@@ -406,7 +334,6 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
   const chainNameA = vaultA.network ?? resolveChainName(vaultA.chainId)
   const chainNameB = vaultB.network ?? resolveChainName(vaultB.chainId)
 
-  // Risk score row content
   function riskNode(riskData, score, win) {
     if (!riskData) {
       return (
@@ -433,7 +360,6 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
 
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container overflow-hidden">
-      {/* Header */}
       <div className="px-6 py-4 border-b border-surface-container flex items-center justify-between bg-surface-container-low">
         <div>
           <h2 className="font-headline font-extrabold text-xl text-on-surface tracking-tight">Head-to-Head Comparison</h2>
@@ -444,7 +370,6 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
         </button>
       </div>
 
-      {/* Vault name banners */}
       <div className="grid grid-cols-[1fr_auto_1fr] gap-0">
         <div className="p-6 border-r border-surface-container space-y-2">
           <div className="flex items-center gap-2">
@@ -477,29 +402,11 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
         </div>
       </div>
 
-      {/* Metric rows */}
       <div className="px-6 pb-2 pt-2 border-t border-surface-container">
-        <ComparisonRow
-          metricLabel="Current APY"
-          valA={fmt(apyA)}   valB={fmt(apyB)}
-          winA={apyWinA}     winB={apyWinB}
-          icon="trending_up"
-        />
-        <ComparisonRow
-          metricLabel="30-Day Avg APY"
-          valA={fmt(apy30A)} valB={fmt(apy30B)}
-          winA={apy30WinA}   winB={apy30WinB}
-          icon="history"
-        />
-        <ComparisonRow
-          metricLabel="Total TVL"
-          valA={fmtTvl(tvlA)} valB={fmtTvl(tvlB)}
-          winA={tvlWinA}      winB={tvlWinB}
-          icon="savings"
-        />
-        <ComparisonRow
-          metricLabel="Risk Score"
-          icon="verified"
+        <ComparisonRow metricLabel="Current APY"   valA={fmt(apyA)}    valB={fmt(apyB)}    winA={apyWinA}   winB={apyWinB}   icon="trending_up" />
+        <ComparisonRow metricLabel="30-Day Avg APY" valA={fmt(apy30A)}  valB={fmt(apy30B)}  winA={apy30WinA} winB={apy30WinB} icon="history" />
+        <ComparisonRow metricLabel="Total TVL"      valA={fmtTvl(tvlA)} valB={fmtTvl(tvlB)} winA={tvlWinA}   winB={tvlWinB}   icon="savings" />
+        <ComparisonRow metricLabel="Risk Score" icon="verified"
           nodeA={<div className="flex justify-end">{riskNode(riskDataA, scoreA, scoreWinA)}</div>}
           nodeB={<div className="flex justify-start">{riskNode(riskDataB, scoreB, scoreWinB)}</div>}
         />
@@ -507,7 +414,6 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
         <ComparisonRow metricLabel="Chain"    valA={chainNameA}           valB={chainNameB}           winA={false} winB={false} icon="link" />
       </div>
 
-      {/* Winner card */}
       <div className="mx-6 mb-6 rounded-2xl overflow-hidden border border-surface-container">
         <div className={`p-5 flex items-center justify-between gap-4 ${isTie ? 'bg-surface-container' : winnerVault === vaultA ? 'bg-primary-container' : 'bg-on-tertiary-container/90'}`}>
           <div className="flex items-center gap-3">
@@ -546,7 +452,6 @@ function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
 }
 
 export default function ComparePage() {
-  const { address } = useAccount()
   const [vaultA, setVaultA]                 = useState(null)
   const [vaultB, setVaultB]                 = useState(null)
   const [showComparison, setShowComparison] = useState(false)
@@ -554,19 +459,16 @@ export default function ComparePage() {
   const [riskDataA, setRiskDataA]           = useState(null)
   const [riskDataB, setRiskDataB]           = useState(null)
 
-  // Load DeFiLlama pools for risk scoring
   useEffect(() => {
     fetchDefiLlamaPools().then(pools => setLlamaPools(pools)).catch(() => {})
   }, [])
 
-  // Compute risk grade for vault A when set
   useEffect(() => {
     if (!vaultA || !llamaPools.length) { setRiskDataA(null); return }
     const pool = matchVaultToPool(vaultA, llamaPools)
     setRiskDataA(pool ? computeRiskScore(vaultA, pool) : null)
   }, [vaultA, llamaPools])
 
-  // Compute risk grade for vault B when set
   useEffect(() => {
     if (!vaultB || !llamaPools.length) { setRiskDataB(null); return }
     const pool = matchVaultToPool(vaultB, llamaPools)
@@ -612,7 +514,7 @@ export default function ComparePage() {
       {!showComparison ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           {!vaultA
-            ? <VaultSelector label="Vault A" address={address} onSelect={setVaultA} />
+            ? <VaultSelector label="Vault A" onSelect={setVaultA} />
             : <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => { setVaultA(null); setRiskDataA(null) }} />}
 
           {!vaultA
@@ -623,7 +525,7 @@ export default function ComparePage() {
               </div>
             )
             : !vaultB
-              ? <VaultSelector label="Vault B" address={address} onSelect={setVaultB} />
+              ? <VaultSelector label="Vault B" onSelect={setVaultB} />
               : <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => { setVaultB(null); setRiskDataB(null) }} />}
         </div>
       ) : (
