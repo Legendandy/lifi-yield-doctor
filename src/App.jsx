@@ -6,6 +6,8 @@ import HomePage from './pages/HomePage'
 import DashboardPage from './pages/DashboardPage'
 import VaultPage from './pages/VaultPage'
 import CompareApyPage from './pages/CompareApyPage'
+import RiskIndexPage from './pages/RiskIndexPage'
+import ApiPage from './pages/ApiPage'
 
 function AuthGuard({ children }) {
   const { isConnected } = useAccount()
@@ -39,6 +41,8 @@ export default function App() {
       <Route path="/compare" element={
         <AuthGuard><CompareApyPage /></AuthGuard>
       } />
+      <Route path="/risk-index" element={<RiskIndexPage />} />
+      <Route path="/api" element={<ApiPage />} />
     </Routes>
   )
 }

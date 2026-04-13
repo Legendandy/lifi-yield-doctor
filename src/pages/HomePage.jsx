@@ -1,13 +1,31 @@
 import { useConnectModal } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
 
+// X (Twitter) SVG logo
+function XLogo({ className = '' }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  )
+}
+
+// Discord SVG logo
+function DiscordLogo({ className = '' }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.491a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 2.98.078.078 0 0 0 .084-.026c.462-.62.874-1.275 1.226-1.963.021-.04.001-.088-.041-.104a13.201 13.201 0 0 1-1.872-.878.075.075 0 0 1-.008-.125c.126-.093.252-.19.372-.287a.075.075 0 0 1 .078-.01c3.927 1.764 8.18 1.764 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.075.075 0 0 1-.006.125c-.598.344-1.22.635-1.873.877a.075.075 0 0 0-.041.105c.36.687.772 1.341 1.225 1.962a.077.077 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-2.981.076.076 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.06.06 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.069-2.157-2.38 0-1.312.956-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.956 2.38-2.157 2.38zm7.975 0c-1.183 0-2.157-1.069-2.157-2.38 0-1.312.955-2.38 2.157-2.38 1.21 0 2.176 1.077 2.157 2.38 0 1.312-.946 2.38-2.157 2.38z" />
+    </svg>
+  )
+}
+
 export default function HomePage({ onConnected }) {
   const { openConnectModal } = useConnectModal()
   const { isConnected } = useAccount()
 
   function handleRunDiagnosis() {
     if (isConnected) {
-      onConnected()
+      onConnected?.()
     } else {
       openConnectModal()
     }
@@ -25,10 +43,19 @@ export default function HomePage({ onConnected }) {
           <span className="text-xl font-extrabold tracking-tighter">Yield Doctor</span>
         </div>
         <div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-on-surface-variant">
-          <a className="hover:text-on-tertiary-container transition-colors" href="#">Portfolio Scan</a>
-          <a className="hover:text-on-tertiary-container transition-colors" href="#">Vaults</a>
-          <a className="hover:text-on-tertiary-container transition-colors" href="#">Risk Index</a>
-          <a className="hover:text-on-tertiary-container transition-colors" href="#">API</a>
+          <a
+    href="#"
+    onClick={(e) => {
+      e.preventDefault()
+      handleRunDiagnosis()
+    }}
+    className="hover:text-on-tertiary-container transition-colors"
+  >
+    Portfolio Scan
+  </a>
+
+          <a className="hover:text-on-tertiary-container transition-colors" href="/risk-index">Risk Index</a>
+          <a className="hover:text-on-tertiary-container transition-colors" href="/api">API</a>
         </div>
         <button
           onClick={handleRunDiagnosis}
@@ -54,18 +81,6 @@ export default function HomePage({ onConnected }) {
               AI-powered analysis that scans your portfolio, detects hidden risks, and unlocks higher yield in seconds.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 max-w-lg">
-              <div className="flex-grow relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline">
-                  account_balance_wallet
-                </span>
-                <input
-                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-outline-variant focus:ring-2 focus:ring-tertiary-fixed-dim focus:border-transparent transition-all outline-none font-medium"
-                  placeholder="Enter wallet address"
-                  type="text"
-                  readOnly
-                  onClick={handleRunDiagnosis}
-                />
-              </div>
               <button
                 onClick={handleRunDiagnosis}
                 className="bg-primary-container text-white px-8 py-4 rounded-xl font-bold hover:shadow-lg transition-all active:scale-95"
@@ -396,22 +411,15 @@ export default function HomePage({ onConnected }) {
         </div>
       </section>
 
-      {/* Final CTA */}
+      {/* Final CTA — no textbox, just button */}
       <section className="py-24 px-6 text-center">
         <div className="max-w-3xl mx-auto space-y-8">
           <h2 className="text-4xl md:text-5xl font-extrabold tracking-tighter">Your Portfolio Is Already Losing Yield.</h2>
           <p className="text-xl text-on-surface-variant">Stop guessing. Run a diagnosis now and see exactly how to optimize your capital.</p>
-          <div className="flex flex-col sm:flex-row gap-3 max-w-lg mx-auto pt-6">
-            <input
-              className="flex-grow px-6 py-4 rounded-xl border border-outline-variant outline-none focus:ring-2 focus:ring-tertiary-fixed-dim font-medium"
-              placeholder="Enter wallet address"
-              type="text"
-              readOnly
-              onClick={handleRunDiagnosis}
-            />
+          <div className="flex justify-center pt-6">
             <button
               onClick={handleRunDiagnosis}
-              className="bg-primary-container text-white px-8 py-4 rounded-xl font-bold hover:shadow-xl transition-all"
+              className="bg-primary-container text-white px-10 py-4 rounded-xl font-bold text-lg hover:shadow-xl transition-all active:scale-95"
             >
               Start Diagnosis
             </button>
@@ -437,7 +445,7 @@ export default function HomePage({ onConnected }) {
             <ul className="space-y-2 text-sm">
               <li><a className="hover:text-white transition-colors" href="#">Portfolio Scan</a></li>
               <li><a className="hover:text-white transition-colors" href="#">Vault Explorer</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Risk Metrics</a></li>
+              <li><a className="hover:text-white transition-colors" href="/risk-index">Risk Metrics</a></li>
             </ul>
           </div>
           <div className="space-y-4">
@@ -445,14 +453,30 @@ export default function HomePage({ onConnected }) {
             <ul className="space-y-2 text-sm">
               <li><a className="hover:text-white transition-colors" href="#">AI Whitepaper</a></li>
               <li><a className="hover:text-white transition-colors" href="#">Security Audit</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">API Docs</a></li>
+              <li><a className="hover:text-white transition-colors" href="/api">API Docs</a></li>
             </ul>
           </div>
           <div className="space-y-4">
             <h5 className="text-white text-xs font-black uppercase tracking-widest">Community</h5>
             <div className="flex gap-4">
-              <a className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors text-white text-xs font-bold" href="#">𝕏</a>
-              <a className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors text-secondary-fixed-dim text-xs font-bold" href="#">dc</a>
+              <a
+                href="https://x.com/_hadeleen"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors text-white"
+                aria-label="X (Twitter)"
+              >
+                <XLogo className="w-4 h-4" />
+              </a>
+              <a
+                href="https://discord.org"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors text-white"
+                aria-label="Discord"
+              >
+                <DiscordLogo className="w-4 h-4" />
+              </a>
             </div>
           </div>
         </div>
