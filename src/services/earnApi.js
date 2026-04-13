@@ -41,12 +41,12 @@ export function isVaultSane(vault) {
   return true
 }
 
+// Kept for CompareApyPage compatibility — simple composite for side-by-side comparison
 export function computeVaultRankScore(vault) {
   const apy = vault?.analytics?.apy?.total ?? 0
   const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
   const apy30d = vault?.analytics?.apy30d
 
-  // Normalize against 50 (50%) since API returns % directly
   const apyScore = Math.min(Math.sqrt(apy / 50), 1)
   const tvlScore = tvl > 0 ? Math.min(Math.log10(tvl / 10000) / 4, 1) : 0
 
@@ -61,11 +61,9 @@ export function computeVaultRankScore(vault) {
 
 export async function getVaultByAddress(chainId, address) {
   if (!chainId || !address) return null
-
   const cacheKey = `vault:single:${chainId}:${address.toLowerCase()}`
   const cached = getCached(cacheKey)
   if (cached) return cached
-
   try {
     const data = await safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
     if (data && data.analytics) {
@@ -81,7 +79,6 @@ export async function getVaultByAddress(chainId, address) {
 
 export async function getPortfolioPositions(userAddress) {
   if (!userAddress) return []
-
   let json
   try {
     json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
@@ -89,43 +86,26 @@ export async function getPortfolioPositions(userAddress) {
     console.error('[getPortfolioPositions] Failed:', err.message)
     return []
   }
-
   const rawPositions = json.positions ?? []
   if (rawPositions.length === 0) return []
-
-  console.log(`[getPortfolioPositions] ${rawPositions.length} positions, enriching with vault data...`)
 
   const enriched = await Promise.allSettled(
     rawPositions.map(async (pos) => {
       const vaultAddress = pos.asset?.address
-      if (!vaultAddress || !pos.chainId) {
-        console.warn(`[getPortfolioPositions] Skipping position without address/chainId:`, pos.asset?.symbol)
-        return pos
-      }
-
+      if (!vaultAddress || !pos.chainId) return pos
       const vaultData = await getVaultByAddress(pos.chainId, vaultAddress)
-
       if (!vaultData) {
-        console.warn(`[getPortfolioPositions] Could not enrich ${pos.asset?.symbol} on chain ${pos.chainId}`)
         return {
           ...pos,
-          apy: null,
-          apy30d: null,
-          apy7d: null,
-          apy1d: null,
+          apy: null, apy30d: null, apy7d: null, apy1d: null,
           vaultAddress,
           vaultName: pos.asset?.name ?? 'Unknown Vault',
           protocolName: pos.protocolName ?? 'Unknown',
           underlyingTokens: [],
-          lpTokens: pos.asset ? [{
-            address: pos.asset.address,
-            symbol: pos.asset.symbol,
-            decimals: pos.asset.decimals ?? 18,
-          }] : [],
+          lpTokens: pos.asset ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }] : [],
         }
       }
-
-      const enrichedPos = {
+      return {
         ...pos,
         _vaultData: vaultData,
         apy: vaultData.analytics?.apy?.total ?? null,
@@ -141,20 +121,10 @@ export async function getPortfolioPositions(userAddress) {
         underlyingTokens: vaultData.underlyingTokens ?? [],
         lpTokens: vaultData.lpTokens?.length > 0
           ? vaultData.lpTokens
-          : pos.asset
-            ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }]
-            : [],
+          : pos.asset ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }] : [],
       }
-
-      console.log(
-        `[getPortfolioPositions] Enriched ${enrichedPos.vaultName}:`,
-        `APY=${enrichedPos.apy != null ? enrichedPos.apy.toFixed(2) + '%' : 'N/A'}`,
-        `lpDecimals=${enrichedPos.lpTokens[0]?.decimals ?? 'unknown'}`,
-      )
-      return enrichedPos
     })
   )
-
   return enriched.map(r => (r.status === 'fulfilled' ? r.value : r.reason))
 }
 
@@ -172,7 +142,6 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
     if (chainId) params.set('chainId', String(chainId))
     params.set('limit', '100')
     if (cursor) params.set('cursor', cursor)
-
     let json
     try {
       json = await safeFetch(`${BASE}/v1/earn/vaults?${params}`)
@@ -180,19 +149,17 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
       if (pages === 0) throw err
       break
     }
-
     const page = Array.isArray(json) ? json : (json.data ?? [])
     cursor = json.nextCursor ?? null
     pages++
-
     for (const vault of page) {
       if (isVaultSane(vault)) all.push(vault)
     }
-
     if (!cursor || page.length === 0) break
   }
 
-  const sorted = all.sort((a, b) => computeVaultRankScore(b) - computeVaultRankScore(a))
+  // Default sort by APY desc — filters/sorts applied in UI
+  const sorted = all.sort((a, b) => (b.analytics?.apy?.total ?? 0) - (a.analytics?.apy?.total ?? 0))
   setCached(cacheKey, sorted)
   return sorted
 }
@@ -217,7 +184,7 @@ export async function getBestVaultAcrossAllChains() {
     .flatMap(r => r.value)
 
   const sorted = allTopVaults.sort(
-    (a, b) => computeVaultRankScore(b) - computeVaultRankScore(a)
+    (a, b) => (b.analytics?.apy?.total ?? 0) - (a.analytics?.apy?.total ?? 0)
   )
 
   const best = sorted[0] ?? null
@@ -245,13 +212,11 @@ export async function getVaults({
   if (protocol) params.set('protocol', protocol)
   if (sortBy) params.set('sortBy', sortBy)
   params.set('limit', '100')
-
   const json = await safeFetch(`${BASE}/v1/earn/vaults?${params}`)
   const raw = Array.isArray(json) ? json : (json.data ?? [])
-
   return raw
     .filter(v => isVaultSane(v) && Number(v?.analytics?.tvl?.usd ?? 0) >= minTvlUsd)
-    .sort((a, b) => computeVaultRankScore(b) - computeVaultRankScore(a))
+    .sort((a, b) => (b.analytics?.apy?.total ?? 0) - (a.analytics?.apy?.total ?? 0))
     .slice(0, limit)
 }
 
@@ -263,7 +228,6 @@ export async function getSupportedChains() {
   const cacheKey = CACHE_KEYS.chains
   const cached = getCached(cacheKey)
   if (cached) return cached
-
   const data = await safeFetch(`${BASE}/v1/earn/chains`)
   setCached(cacheKey, data)
   return data

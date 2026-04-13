@@ -18,7 +18,6 @@ function resolveChainName(chainId) {
   return CHAIN_NAMES_MAP[chainId] ?? `Chain ${chainId}`
 }
 
-// APY already a % — just append % directly
 function fmt(val) {
   if (val == null) return 'N/A'
   return `${val.toFixed(2)}%`
@@ -60,14 +59,14 @@ function positionToVault(pos) {
 }
 
 function VaultSelector({ label, address, onSelect }) {
-  const [positions, setPositions]       = useState([])
-  const [chains, setChains]             = useState([])
+  const [positions, setPositions]         = useState([])
+  const [chains, setChains]               = useState([])
   const [selectedChain, setSelectedChain] = useState(null)
-  const [vaults, setVaults]             = useState([])
-  const [step, setStep]                 = useState('loading')
-  const [loading, setLoading]           = useState(false)
-  const [error, setError]               = useState(null)
-  const [search, setSearch]             = useState('')
+  const [vaults, setVaults]               = useState([])
+  const [step, setStep]                   = useState('loading')
+  const [loading, setLoading]             = useState(false)
+  const [error, setError]                 = useState(null)
+  const [search, setSearch]               = useState('')
 
   useEffect(() => {
     if (!address) { setStep('pick-chain'); loadChains(); return }
@@ -287,6 +286,8 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
   const apy30B = vaultB.analytics?.apy30d
   const tvlA   = Number(vaultA.analytics?.tvl?.usd ?? 0)
   const tvlB   = Number(vaultB.analytics?.tvl?.usd ?? 0)
+  // Risk score: higher composite = better (lower raw risk score isn't directly comparable here,
+  // we use the same composite rank score for comparison since we don't have DeFiLlama data loaded here)
   const scoreA = computeVaultRankScore(vaultA)
   const scoreB = computeVaultRankScore(vaultB)
 
@@ -302,7 +303,6 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
   const winsA = [apyWinA, apy30WinA, tvlWinA, scoreWinA].filter(Boolean).length
   const winsB = [apyWinB, apy30WinB, tvlWinB, scoreWinB].filter(Boolean).length
 
-  // APY already %, divide by 100 for dollar gain math
   const annualGain = apyA != null && apyB != null ? Math.abs((apyA - apyB) / 100 * 10_000) : null
   const apyDiff    = apyA != null && apyB != null ? Math.abs(apyA - apyB).toFixed(2) : null
 
@@ -363,7 +363,7 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
         <ComparisonRow metricLabel="Current APY"   valA={fmt(apyA)}   valB={fmt(apyB)}   winA={apyWinA}   winB={apyWinB}   icon="trending_up" />
         <ComparisonRow metricLabel="30-Day Avg APY" valA={fmt(apy30A)} valB={fmt(apy30B)} winA={apy30WinA} winB={apy30WinB} icon="history" />
         <ComparisonRow metricLabel="Total TVL"      valA={fmtTvl(tvlA)} valB={fmtTvl(tvlB)} winA={tvlWinA} winB={tvlWinB} icon="savings" />
-        <ComparisonRow metricLabel="Quality Score"  valA={`${Math.round(scoreA * 100)}/100`} valB={`${Math.round(scoreB * 100)}/100`} winA={scoreWinA} winB={scoreWinB} icon="verified" />
+        <ComparisonRow metricLabel="Risk Score"     valA={`${Math.round(scoreA * 100)}/100`} valB={`${Math.round(scoreB * 100)}/100`} winA={scoreWinA} winB={scoreWinB} icon="verified" />
         <ComparisonRow metricLabel="Protocol"       valA={vaultA.protocol.name} valB={vaultB.protocol.name} winA={false} winB={false} icon="hub" />
         <ComparisonRow metricLabel="Chain"          valA={chainNameA} valB={chainNameB} winA={false} winB={false} icon="link" />
       </div>
@@ -407,8 +407,8 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
 
 export default function ComparePage() {
   const { address } = useAccount()
-  const [vaultA, setVaultA]               = useState(null)
-  const [vaultB, setVaultB]               = useState(null)
+  const [vaultA, setVaultA]                 = useState(null)
+  const [vaultB, setVaultB]                 = useState(null)
   const [showComparison, setShowComparison] = useState(false)
 
   useEffect(() => {
