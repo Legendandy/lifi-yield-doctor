@@ -19,7 +19,6 @@ async function safeFetch(url) {
   return res.json()
 }
 
-// API returns APY as a percentage already (e.g. 3.8 = 3.8%, NOT 0.038)
 const ABSOLUTE_MAX_APY = 500
 const MIN_TVL_FOR_DISPLAY = 10_000
 
@@ -41,7 +40,6 @@ export function isVaultSane(vault) {
   return true
 }
 
-// Kept for CompareApyPage compatibility — simple composite for side-by-side comparison
 export function computeVaultRankScore(vault) {
   const apy = vault?.analytics?.apy?.total ?? 0
   const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
@@ -59,6 +57,9 @@ export function computeVaultRankScore(vault) {
   return apyScore * 0.50 + tvlScore * 0.35 + stabilityBonus
 }
 
+// Calls GET /v1/earn/vaults/:chainId/:address
+// This is the key function — takes chainId and vault address from a position
+// and returns the full vault object including analytics.apy.total, apy30d, tvl, etc.
 export async function getVaultByAddress(chainId, address) {
   if (!chainId || !address) return null
   const cacheKey = `vault:single:${chainId}:${address.toLowerCase()}`
@@ -72,13 +73,18 @@ export async function getVaultByAddress(chainId, address) {
     }
     return null
   } catch (err) {
-    console.warn(`[getVaultByAddress] Failed for chain ${chainId} addr ${address.slice(0,10)}:`, err.message)
+    console.warn(`[getVaultByAddress] Failed chain=${chainId} addr=${address.slice(0,10)}:`, err.message)
     return null
   }
 }
 
+// GET /v1/earn/portfolio/:userAddress/positions returns positions WITHOUT apy.
+// Each position has chainId and asset.address (the vault contract address).
+// We call getVaultByAddress(chainId, asset.address) for each position to get
+// the full vault data including apy, apy30d, tvl, etc.
 export async function getPortfolioPositions(userAddress) {
   if (!userAddress) return []
+
   let json
   try {
     json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
@@ -86,28 +92,42 @@ export async function getPortfolioPositions(userAddress) {
     console.error('[getPortfolioPositions] Failed:', err.message)
     return []
   }
+
   const rawPositions = json.positions ?? []
   if (rawPositions.length === 0) return []
 
   const enriched = await Promise.allSettled(
     rawPositions.map(async (pos) => {
+      // asset.address is the vault contract address
       const vaultAddress = pos.asset?.address
       if (!vaultAddress || !pos.chainId) return pos
+
+      // Fetch full vault details using chainId + vault address
       const vaultData = await getVaultByAddress(pos.chainId, vaultAddress)
+
       if (!vaultData) {
+        // Could not fetch vault — return position with nulls
         return {
           ...pos,
-          apy: null, apy30d: null, apy7d: null, apy1d: null,
+          _vaultData: null,
+          apy: null,
+          apy30d: null,
+          tvlUsd: 0,
           vaultAddress,
           vaultName: pos.asset?.name ?? 'Unknown Vault',
           protocolName: pos.protocolName ?? 'Unknown',
           underlyingTokens: [],
-          lpTokens: pos.asset ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }] : [],
+          lpTokens: pos.asset
+            ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }]
+            : [],
         }
       }
+
+      // Merge full vault data into the position
       return {
         ...pos,
         _vaultData: vaultData,
+        // APY fields from the vault detail endpoint
         apy: vaultData.analytics?.apy?.total ?? null,
         apy30d: vaultData.analytics?.apy30d ?? null,
         apy7d: vaultData.analytics?.apy7d ?? null,
@@ -121,10 +141,13 @@ export async function getPortfolioPositions(userAddress) {
         underlyingTokens: vaultData.underlyingTokens ?? [],
         lpTokens: vaultData.lpTokens?.length > 0
           ? vaultData.lpTokens
-          : pos.asset ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }] : [],
+          : pos.asset
+            ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }]
+            : [],
       }
     })
   )
+
   return enriched.map(r => (r.status === 'fulfilled' ? r.value : r.reason))
 }
 
@@ -158,7 +181,6 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
     if (!cursor || page.length === 0) break
   }
 
-  // Default sort by APY desc — filters/sorts applied in UI
   const sorted = all.sort((a, b) => (b.analytics?.apy?.total ?? 0) - (a.analytics?.apy?.total ?? 0))
   setCached(cacheKey, sorted)
   return sorted

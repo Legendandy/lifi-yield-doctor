@@ -1,15 +1,29 @@
 // src/pages/CompareApyPage.jsx
 // APY from API is already a percentage (e.g. 3.8 = 3.8%) — NO * 100 anywhere
+//
+// For positions selected from portfolio: they already have apy, apy30d, tvlUsd
+// set on them from getPortfolioPositions (which calls getVaultByAddress internally).
+//
+// For vaults selected from the chain list: the list endpoint already returns
+// analytics.apy.total, analytics.apy30d, analytics.tvl.usd — use them directly.
+//
+// Risk score: computed from DeFiLlama pool matching (same as VaultPage).
 import { useState, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import AppShell from '../components/AppShell'
 import {
   getPortfolioPositions,
-  getVaults,
   getSupportedChains,
   getVaultsForChain,
+  getVaultByAddress,
   computeVaultRankScore,
 } from '../services/earnApi'
+import {
+  fetchDefiLlamaPools,
+  matchVaultToPool,
+  computeRiskScore,
+  GRADE_CONFIG,
+} from '../services/defiLlama'
 import { SUPPORTED_CHAINS } from '../services/tokenBalances'
 
 const CHAIN_NAMES_MAP = Object.fromEntries(SUPPORTED_CHAINS.map(c => [c.id, c.name]))
@@ -28,18 +42,22 @@ function fmtTvl(usd) {
   if (n >= 1_000_000_000) return `$${(n / 1e9).toFixed(1)}B`
   if (n >= 1_000_000)     return `$${(n / 1e6).toFixed(1)}M`
   if (n >= 1_000)         return `$${(n / 1e3).toFixed(0)}K`
-  return `$${n.toFixed(0)}`
+  return n > 0 ? `$${n.toFixed(0)}` : '—'
 }
 
+// Build a normalised vault object from a portfolio position.
+// The position already has apy, apy30d, tvlUsd set by getPortfolioPositions
+// (which called getVaultByAddress). If _vaultData exists, use it directly.
 function positionToVault(pos) {
   if (pos._vaultData) {
     return {
       ...pos._vaultData,
-      network: resolveChainName(pos._vaultData.chainId),
+      network: pos._vaultData.network ?? resolveChainName(pos._vaultData.chainId),
       _isPosition: true,
       _positionBalanceUsd: Number(pos.balanceUsd ?? 0),
     }
   }
+  // Fallback: build from what the position already has
   return {
     name: pos.vaultName ?? `${pos.asset?.symbol ?? 'Unknown'} Vault`,
     protocol: { name: pos.protocolName ?? 'Unknown' },
@@ -49,13 +67,74 @@ function positionToVault(pos) {
     analytics: {
       apy: { total: pos.apy ?? null },
       apy30d: pos.apy30d ?? null,
-      apy7d: pos.apy7d ?? null,
       tvl: { usd: pos.tvlUsd ?? 0 },
     },
     underlyingTokens: pos.underlyingTokens ?? (pos.asset ? [pos.asset] : []),
     _isPosition: true,
     _positionBalanceUsd: Number(pos.balanceUsd ?? 0),
   }
+}
+
+// For a vault from the list endpoint, try fetching the single-vault endpoint
+// to get apy30d if it's missing. The list already has apy.total and tvl.
+async function ensureFullVaultData(vault) {
+  // If we already have apy30d, nothing more to fetch
+  if (vault.analytics?.apy30d != null) return vault
+  // Try to fetch the single vault endpoint for richer data
+  if (vault.chainId && vault.address) {
+    try {
+      const full = await getVaultByAddress(vault.chainId, vault.address)
+      if (full) {
+        return {
+          ...full,
+          network: full.network ?? vault.network ?? resolveChainName(full.chainId),
+          _chainName: vault._chainName,
+        }
+      }
+    } catch { /* use what we have */ }
+  }
+  return vault
+}
+
+// Risk grade badge
+function RiskBadge({ riskData, size = 'sm' }) {
+  if (!riskData) {
+    return (
+      <span className={`inline-flex items-center justify-center font-black rounded-lg border
+        ${size === 'lg' ? 'w-10 h-10 text-base' : 'w-8 h-8 text-sm'}
+        bg-surface-container border-surface-container-high text-on-surface-variant`}>
+        —
+      </span>
+    )
+  }
+  const { grade, score } = riskData
+  const cfg = GRADE_CONFIG[grade]
+  return (
+    <span
+      className={`inline-flex items-center justify-center font-black rounded-lg border cursor-default
+        ${size === 'lg' ? 'w-10 h-10 text-base' : 'w-8 h-8 text-sm'}`}
+      style={{ color: cfg.color, background: cfg.bg, borderColor: cfg.border }}
+      title={`Risk Grade ${grade} · Score ${score}/100`}
+    >
+      {grade}
+    </span>
+  )
+}
+
+function SelectorHeader({ label }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-9 h-9 rounded-xl bg-primary-container/10 flex items-center justify-center">
+        <span className="material-symbols-outlined text-primary-container text-[18px]">
+          {label === 'Vault A' ? 'looks_one' : 'looks_two'}
+        </span>
+      </div>
+      <div>
+        <h3 className="font-headline font-bold text-base text-on-surface">{label}</h3>
+        <p className="text-[10px] text-on-surface-variant uppercase tracking-widest">Select vault to compare</p>
+      </div>
+    </div>
+  )
 }
 
 function VaultSelector({ label, address, onSelect }) {
@@ -65,6 +144,7 @@ function VaultSelector({ label, address, onSelect }) {
   const [vaults, setVaults]               = useState([])
   const [step, setStep]                   = useState('loading')
   const [loading, setLoading]             = useState(false)
+  const [enriching, setEnriching]         = useState(false)
   const [error, setError]                 = useState(null)
   const [search, setSearch]               = useState('')
 
@@ -91,8 +171,26 @@ function VaultSelector({ label, address, onSelect }) {
     finally { setLoading(false) }
   }
 
-  function handlePositionSelect(pos) { onSelect(positionToVault(pos)); setStep('done') }
-  function handleVaultSelect(vault) { onSelect({ ...vault, network: vault.network ?? resolveChainName(vault.chainId) }); setStep('done') }
+  async function handlePositionSelect(pos) {
+    // Position already has full data from getPortfolioPositions
+    onSelect(positionToVault(pos))
+    setStep('done')
+  }
+
+  async function handleVaultSelect(vault) {
+    // Ensure we have apy30d — fetch single vault if needed
+    setEnriching(true)
+    try {
+      const full = await ensureFullVaultData({
+        ...vault,
+        network: vault.network ?? resolveChainName(vault.chainId),
+      })
+      onSelect(full)
+      setStep('done')
+    } finally {
+      setEnriching(false)
+    }
+  }
 
   const filteredVaults = vaults.filter(v =>
     v.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -102,10 +200,13 @@ function VaultSelector({ label, address, onSelect }) {
 
   const cardBase = 'bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container p-6 space-y-4'
 
-  if (step === 'loading') return (
+  if (step === 'loading' || enriching) return (
     <div className={cardBase}>
       <SelectorHeader label={label} />
-      <div className="animate-pulse space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-surface-container rounded-xl" />)}</div>
+      <div className="flex flex-col items-center gap-3 py-6">
+        <span className="material-symbols-outlined text-on-surface-variant text-3xl animate-spin">progress_activity</span>
+        <p className="text-xs text-on-surface-variant">{enriching ? 'Loading vault data...' : 'Loading positions...'}</p>
+      </div>
     </div>
   )
 
@@ -213,22 +314,6 @@ function VaultSelector({ label, address, onSelect }) {
   )
 }
 
-function SelectorHeader({ label }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="w-9 h-9 rounded-xl bg-primary-container/10 flex items-center justify-center">
-        <span className="material-symbols-outlined text-primary-container text-[18px]">
-          {label === 'Vault A' ? 'looks_one' : 'looks_two'}
-        </span>
-      </div>
-      <div>
-        <h3 className="font-headline font-bold text-base text-on-surface">{label}</h3>
-        <p className="text-[10px] text-on-surface-variant uppercase tracking-widest">Select vault to compare</p>
-      </div>
-    </div>
-  )
-}
-
 function SelectedVaultChip({ vault, label, onClear }) {
   const chainName = vault?.network ?? resolveChainName(vault?.chainId)
   return (
@@ -258,26 +343,34 @@ function SelectedVaultChip({ vault, label, onClear }) {
   )
 }
 
-function ComparisonRow({ metricLabel, valA, valB, winA, winB, icon }) {
+function ComparisonRow({ metricLabel, valA, valB, winA, winB, icon, nodeA, nodeB }) {
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 py-3 border-b border-surface-container last:border-0">
       <div className="text-right">
-        <p className={`font-headline font-black text-lg leading-none ${winA ? 'text-on-tertiary-container' : 'text-on-surface'}`}>{valA}</p>
-        {winA && <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>}
+        {nodeA ?? (
+          <>
+            <p className={`font-headline font-black text-lg leading-none ${winA ? 'text-on-tertiary-container' : 'text-on-surface'}`}>{valA}</p>
+            {winA && <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>}
+          </>
+        )}
       </div>
       <div className="flex flex-col items-center gap-1 px-4">
         {icon && <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{icon}</span>}
         <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant text-center whitespace-nowrap">{metricLabel}</p>
       </div>
       <div className="text-left">
-        <p className={`font-headline font-black text-lg leading-none ${winB ? 'text-on-tertiary-container' : 'text-on-surface'}`}>{valB}</p>
-        {winB && <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>}
+        {nodeB ?? (
+          <>
+            <p className={`font-headline font-black text-lg leading-none ${winB ? 'text-on-tertiary-container' : 'text-on-surface'}`}>{valB}</p>
+            {winB && <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>}
+          </>
+        )}
       </div>
     </div>
   )
 }
 
-function ComparisonPanel({ vaultA, vaultB, onClose }) {
+function ComparisonPanel({ vaultA, vaultB, riskDataA, riskDataB, onClose }) {
   if (!vaultA || !vaultB) return null
 
   const apyA   = vaultA.analytics?.apy?.total
@@ -286,10 +379,8 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
   const apy30B = vaultB.analytics?.apy30d
   const tvlA   = Number(vaultA.analytics?.tvl?.usd ?? 0)
   const tvlB   = Number(vaultB.analytics?.tvl?.usd ?? 0)
-  // Risk score: higher composite = better (lower raw risk score isn't directly comparable here,
-  // we use the same composite rank score for comparison since we don't have DeFiLlama data loaded here)
-  const scoreA = computeVaultRankScore(vaultA)
-  const scoreB = computeVaultRankScore(vaultB)
+  const scoreA = riskDataA?.score ?? Math.round(computeVaultRankScore(vaultA) * 100)
+  const scoreB = riskDataB?.score ?? Math.round(computeVaultRankScore(vaultB) * 100)
 
   const apyWinA   = apyA != null && apyB != null && apyA > apyB
   const apyWinB   = apyA != null && apyB != null && apyB > apyA
@@ -315,18 +406,45 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
   const chainNameA = vaultA.network ?? resolveChainName(vaultA.chainId)
   const chainNameB = vaultB.network ?? resolveChainName(vaultB.chainId)
 
+  // Risk score row content
+  function riskNode(riskData, score, win) {
+    if (!riskData) {
+      return (
+        <div>
+          <p className={`font-black text-lg ${win ? 'text-on-tertiary-container' : 'text-on-surface'}`}>{score}/100</p>
+          {win && <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>}
+        </div>
+      )
+    }
+    const cfg = GRADE_CONFIG[riskData.grade]
+    return (
+      <div className="flex items-center gap-2">
+        <span
+          className="inline-flex items-center justify-center w-8 h-8 text-sm font-black rounded-lg border"
+          style={{ color: cfg.color, background: cfg.bg, borderColor: cfg.border }}
+        >{riskData.grade}</span>
+        <div>
+          <p className={`font-black text-sm ${win ? 'text-on-tertiary-container' : 'text-on-surface'}`}>{riskData.score}/100</p>
+          {win && <span className="text-[9px] font-black text-on-tertiary-container uppercase tracking-widest">▲ Better</span>}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="bg-surface-container-lowest rounded-2xl clinical-shadow border border-surface-container overflow-hidden">
+      {/* Header */}
       <div className="px-6 py-4 border-b border-surface-container flex items-center justify-between bg-surface-container-low">
         <div>
           <h2 className="font-headline font-extrabold text-xl text-on-surface tracking-tight">Head-to-Head Comparison</h2>
-          <p className="text-xs text-on-surface-variant mt-0.5">Based on current live data</p>
+          <p className="text-xs text-on-surface-variant mt-0.5">Based on current live data · Risk grades from DeFiLlama</p>
         </div>
         <button onClick={onClose} className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center hover:bg-error-container/30 transition-colors">
           <span className="material-symbols-outlined text-[16px] text-on-surface-variant">close</span>
         </button>
       </div>
 
+      {/* Vault name banners */}
       <div className="grid grid-cols-[1fr_auto_1fr] gap-0">
         <div className="p-6 border-r border-surface-container space-y-2">
           <div className="flex items-center gap-2">
@@ -359,15 +477,37 @@ function ComparisonPanel({ vaultA, vaultB, onClose }) {
         </div>
       </div>
 
+      {/* Metric rows */}
       <div className="px-6 pb-2 pt-2 border-t border-surface-container">
-        <ComparisonRow metricLabel="Current APY"   valA={fmt(apyA)}   valB={fmt(apyB)}   winA={apyWinA}   winB={apyWinB}   icon="trending_up" />
-        <ComparisonRow metricLabel="30-Day Avg APY" valA={fmt(apy30A)} valB={fmt(apy30B)} winA={apy30WinA} winB={apy30WinB} icon="history" />
-        <ComparisonRow metricLabel="Total TVL"      valA={fmtTvl(tvlA)} valB={fmtTvl(tvlB)} winA={tvlWinA} winB={tvlWinB} icon="savings" />
-        <ComparisonRow metricLabel="Risk Score"     valA={`${Math.round(scoreA * 100)}/100`} valB={`${Math.round(scoreB * 100)}/100`} winA={scoreWinA} winB={scoreWinB} icon="verified" />
-        <ComparisonRow metricLabel="Protocol"       valA={vaultA.protocol.name} valB={vaultB.protocol.name} winA={false} winB={false} icon="hub" />
-        <ComparisonRow metricLabel="Chain"          valA={chainNameA} valB={chainNameB} winA={false} winB={false} icon="link" />
+        <ComparisonRow
+          metricLabel="Current APY"
+          valA={fmt(apyA)}   valB={fmt(apyB)}
+          winA={apyWinA}     winB={apyWinB}
+          icon="trending_up"
+        />
+        <ComparisonRow
+          metricLabel="30-Day Avg APY"
+          valA={fmt(apy30A)} valB={fmt(apy30B)}
+          winA={apy30WinA}   winB={apy30WinB}
+          icon="history"
+        />
+        <ComparisonRow
+          metricLabel="Total TVL"
+          valA={fmtTvl(tvlA)} valB={fmtTvl(tvlB)}
+          winA={tvlWinA}      winB={tvlWinB}
+          icon="savings"
+        />
+        <ComparisonRow
+          metricLabel="Risk Score"
+          icon="verified"
+          nodeA={<div className="flex justify-end">{riskNode(riskDataA, scoreA, scoreWinA)}</div>}
+          nodeB={<div className="flex justify-start">{riskNode(riskDataB, scoreB, scoreWinB)}</div>}
+        />
+        <ComparisonRow metricLabel="Protocol" valA={vaultA.protocol.name} valB={vaultB.protocol.name} winA={false} winB={false} icon="hub" />
+        <ComparisonRow metricLabel="Chain"    valA={chainNameA}           valB={chainNameB}           winA={false} winB={false} icon="link" />
       </div>
 
+      {/* Winner card */}
       <div className="mx-6 mb-6 rounded-2xl overflow-hidden border border-surface-container">
         <div className={`p-5 flex items-center justify-between gap-4 ${isTie ? 'bg-surface-container' : winnerVault === vaultA ? 'bg-primary-container' : 'bg-on-tertiary-container/90'}`}>
           <div className="flex items-center gap-3">
@@ -410,13 +550,39 @@ export default function ComparePage() {
   const [vaultA, setVaultA]                 = useState(null)
   const [vaultB, setVaultB]                 = useState(null)
   const [showComparison, setShowComparison] = useState(false)
+  const [llamaPools, setLlamaPools]         = useState([])
+  const [riskDataA, setRiskDataA]           = useState(null)
+  const [riskDataB, setRiskDataB]           = useState(null)
+
+  // Load DeFiLlama pools for risk scoring
+  useEffect(() => {
+    fetchDefiLlamaPools().then(pools => setLlamaPools(pools)).catch(() => {})
+  }, [])
+
+  // Compute risk grade for vault A when set
+  useEffect(() => {
+    if (!vaultA || !llamaPools.length) { setRiskDataA(null); return }
+    const pool = matchVaultToPool(vaultA, llamaPools)
+    setRiskDataA(pool ? computeRiskScore(vaultA, pool) : null)
+  }, [vaultA, llamaPools])
+
+  // Compute risk grade for vault B when set
+  useEffect(() => {
+    if (!vaultB || !llamaPools.length) { setRiskDataB(null); return }
+    const pool = matchVaultToPool(vaultB, llamaPools)
+    setRiskDataB(pool ? computeRiskScore(vaultB, pool) : null)
+  }, [vaultB, llamaPools])
 
   useEffect(() => {
     if (vaultA && vaultB) { const t = setTimeout(() => setShowComparison(true), 200); return () => clearTimeout(t) }
     else setShowComparison(false)
   }, [vaultA, vaultB])
 
-  function resetComparison() { setVaultA(null); setVaultB(null); setShowComparison(false) }
+  function resetComparison() {
+    setVaultA(null); setVaultB(null)
+    setShowComparison(false)
+    setRiskDataA(null); setRiskDataB(null)
+  }
 
   const progress = (vaultA ? 1 : 0) + (vaultB ? 1 : 0)
 
@@ -447,28 +613,31 @@ export default function ComparePage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           {!vaultA
             ? <VaultSelector label="Vault A" address={address} onSelect={setVaultA} />
-            : <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => setVaultA(null)} />}
+            : <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => { setVaultA(null); setRiskDataA(null) }} />}
+
           {!vaultA
-            ? <div className="bg-surface-container-lowest rounded-2xl border-2 border-dashed border-surface-container p-8 flex flex-col items-center justify-center text-center gap-3 opacity-40">
+            ? (
+              <div className="bg-surface-container-lowest rounded-2xl border-2 border-dashed border-surface-container p-8 flex flex-col items-center justify-center text-center gap-3 opacity-40">
                 <span className="material-symbols-outlined text-4xl text-on-surface-variant">looks_two</span>
                 <p className="font-bold text-sm text-on-surface-variant">Select Vault A first</p>
               </div>
+            )
             : !vaultB
               ? <VaultSelector label="Vault B" address={address} onSelect={setVaultB} />
-              : <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => setVaultB(null)} />}
+              : <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => { setVaultB(null); setRiskDataB(null) }} />}
         </div>
       ) : (
         <div className="space-y-4 mb-8">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => { setVaultA(null); setShowComparison(false) }} />
-            <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => { setVaultB(null); setShowComparison(false) }} />
+            <SelectedVaultChip vault={vaultA} label="Vault A" onClear={() => { setVaultA(null); setShowComparison(false); setRiskDataA(null) }} />
+            <SelectedVaultChip vault={vaultB} label="Vault B" onClear={() => { setVaultB(null); setShowComparison(false); setRiskDataB(null) }} />
           </div>
         </div>
       )}
 
       {showComparison && vaultA && vaultB && (
         <div className="mb-6">
-          <ComparisonPanel vaultA={vaultA} vaultB={vaultB} onClose={resetComparison} />
+          <ComparisonPanel vaultA={vaultA} vaultB={vaultB} riskDataA={riskDataA} riskDataB={riskDataB} onClose={resetComparison} />
         </div>
       )}
 

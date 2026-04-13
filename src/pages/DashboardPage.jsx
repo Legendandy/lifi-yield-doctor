@@ -1,5 +1,9 @@
 // src/pages/DashboardPage.jsx
 // APY from API is already a percentage (e.g. 3.8 = 3.8%) — NO * 100 anywhere
+// Portfolio positions don't include APY. We call GET /v1/earn/vaults/:chainId/:address
+// (via getVaultByAddress in earnApi) for each position to get the full vault data.
+// The result is stored on position._vaultData, and position.apy / position.apy30d
+// are set from vaultData.analytics.apy.total / vaultData.analytics.apy30d.
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
@@ -220,14 +224,15 @@ function NoPositionsState({ onGoToVaults }) {
 }
 
 function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
+  // position.apy and position.apy30d are set from vaultData.analytics in getPortfolioPositions
   const currentApy = position.apy
   const tag = getHealthTag(currentApy, bestApy)
-  // APY is already a % — just display directly
   const apyDisplay = currentApy != null ? `${currentApy.toFixed(2)}%` : 'N/A'
   const chainName = getChainName(position.chainId)
   const protocolName = position.protocolName ?? 'Unknown'
   const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
 
+  // Use full _vaultData for the deposit/withdraw modal so it has all fields
   const vaultForModal = position._vaultData ?? {
     name: vaultName,
     protocol: { name: protocolName },
@@ -262,22 +267,20 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
 
       {position.apy30d != null && (
         <div className="flex gap-4 mb-4 p-3 bg-surface-container rounded-xl">
-          <div className="flex-1 text-center">
-            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">1D APY</p>
-            <p className="font-bold text-sm text-on-surface mt-0.5">
-              {position.apy1d != null ? `${position.apy1d.toFixed(2)}%` : '—'}
-            </p>
-          </div>
-          <div className="flex-1 text-center border-x border-surface-container-high">
-            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">7D APY</p>
-            <p className="font-bold text-sm text-on-surface mt-0.5">
-              {position.apy7d != null ? `${position.apy7d.toFixed(2)}%` : '—'}
-            </p>
-          </div>
-          <div className="flex-1 text-center">
+          <div className="flex-1 text-center border-r border-surface-container-high">
             <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">30D APY</p>
             <p className="font-bold text-sm text-on-tertiary-container mt-0.5">
               {`${position.apy30d.toFixed(2)}%`}
+            </p>
+          </div>
+          <div className="flex-1 text-center">
+            <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">TVL</p>
+            <p className="font-bold text-sm text-on-surface mt-0.5">
+              {position.tvlUsd >= 1_000_000
+                ? `$${(position.tvlUsd / 1e6).toFixed(1)}M`
+                : position.tvlUsd >= 1_000
+                  ? `$${(position.tvlUsd / 1e3).toFixed(0)}K`
+                  : `$${position.tvlUsd?.toFixed(0) ?? '0'}`}
             </p>
           </div>
         </div>
@@ -342,7 +345,6 @@ function DiagnosisSummary({ diagnosis, loading }) {
 }
 
 function BestCrossChainCard({ vault, onDeposit }) {
-  // APY already a % — display directly
   const apy = vault.analytics?.apy?.total != null
     ? `${vault.analytics.apy.total.toFixed(2)}%` : 'N/A'
   const chainName = vault._chainName ?? vault.network ?? getChainName(vault.chainId)
@@ -390,7 +392,6 @@ function AlternativesTable({ vaults, onDeposit }) {
       </div>
       <div className="divide-y divide-surface-container">
         {vaults.slice(0, 5).map((vault, i) => {
-          // APY already a % — display directly
           const apy = vault.analytics.apy.total != null
             ? `${vault.analytics.apy.total.toFixed(2)}%` : 'N/A'
           return (
