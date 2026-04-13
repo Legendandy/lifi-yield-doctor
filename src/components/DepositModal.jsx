@@ -285,7 +285,7 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 100) }, [])
 
   const apy        = vault?.analytics?.apy?.total
-  const apyDisplay = apy != null ? `${(apy * 100).toFixed(2)}%` : 'N/A'
+  const apyDisplay = apy != null ? `${apy.toFixed(2)}%` : 'N/A'
   const amountNum  = parseFloat(amount) || 0
   const balFloat   = sourceToken?.balanceFloat ?? 0
   const hasInsuf   = amountNum > 0 && amountNum > balFloat
@@ -656,8 +656,8 @@ function AmountStep({ vault, sourceChainId, sourceToken, onBack, onSuccess, onCl
             <div className="flex items-center justify-between p-2.5 bg-on-tertiary-container/5 rounded-xl border border-on-tertiary-container/10">
               <p className="text-xs text-on-surface-variant font-medium">Projected earnings</p>
               <div className="text-right">
-                <p className="text-xs font-black text-on-tertiary-container">+{(amountNum * apy / 12).toFixed(4)} {sourceToken.symbol}/mo</p>
-                <p className="text-[10px] text-on-surface-variant">+{(amountNum * apy).toFixed(4)}/yr</p>
+               <p className="text-xs font-black text-on-tertiary-container">+{(amountNum * apy / 100 / 12).toFixed(4)} {sourceToken.symbol}/mo</p>
+              <p className="text-[10px] text-on-surface-variant">+{(amountNum * apy / 100).toFixed(4)}/yr</p>
               </div>
             </div>
           )}

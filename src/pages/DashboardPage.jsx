@@ -1,4 +1,5 @@
 // src/pages/DashboardPage.jsx
+// APY from API is already a percentage (e.g. 3.8 = 3.8%) — NO * 100 anywhere
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
@@ -63,7 +64,7 @@ export default function DashboardPage() {
     setError(null)
     try {
       const [userPositions, topVaults, bestVault] = await Promise.all([
-        getPortfolioPositions(address),  // now enriched with apy, apy30d, balanceNative
+        getPortfolioPositions(address),
         getVaults({ sortBy: 'apy', minTvlUsd: 500_000, limit: 10 }),
         getBestVaultAcrossAllChains(),
       ])
@@ -221,22 +222,18 @@ function NoPositionsState({ onGoToVaults }) {
 function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
   const currentApy = position.apy
   const tag = getHealthTag(currentApy, bestApy)
-  const apyDisplay = currentApy != null ? `${(currentApy * 100).toFixed(2)}%` : 'N/A'
+  // APY is already a % — just display directly
+  const apyDisplay = currentApy != null ? `${currentApy.toFixed(2)}%` : 'N/A'
   const chainName = getChainName(position.chainId)
   const protocolName = position.protocolName ?? 'Unknown'
   const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
- 
-  // CRITICAL: always use _vaultData from earnApi enrichment.
-  // _vaultData comes from GET /v1/earn/vaults/:chainId/:address and includes lpTokens.
-  // A synthesized object has no lpTokens, which breaks withdrawal LP token resolution.
+
   const vaultForModal = position._vaultData ?? {
     name: vaultName,
     protocol: { name: protocolName },
     network: chainName,
     chainId: position.chainId,
     address: position.vaultAddress ?? position.asset?.address ?? '',
-    // lpTokens deliberately omitted from fallback — resolveWithdrawFromToken will
-    // then fall back to position.asset.address and check it against underlyingTokens
     analytics: {
       apy: { total: currentApy },
       apy30d: position.apy30d ?? null,
@@ -244,7 +241,7 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
     },
     underlyingTokens: position.underlyingTokens ?? (position.asset ? [position.asset] : []),
   }
- 
+
   return (
     <div className="bg-surface-container-lowest p-6 rounded-xl clinical-shadow hover:bg-surface-container-low transition-colors">
       <div className="flex justify-between items-start mb-4">
@@ -262,30 +259,30 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
           <span className="text-[10px] uppercase tracking-tighter font-bold text-on-surface-variant">Current APY</span>
         </div>
       </div>
- 
+
       {position.apy30d != null && (
         <div className="flex gap-4 mb-4 p-3 bg-surface-container rounded-xl">
           <div className="flex-1 text-center">
             <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">1D APY</p>
             <p className="font-bold text-sm text-on-surface mt-0.5">
-              {position.apy1d != null ? `${(position.apy1d * 100).toFixed(2)}%` : '—'}
+              {position.apy1d != null ? `${position.apy1d.toFixed(2)}%` : '—'}
             </p>
           </div>
           <div className="flex-1 text-center border-x border-surface-container-high">
             <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">7D APY</p>
             <p className="font-bold text-sm text-on-surface mt-0.5">
-              {position.apy7d != null ? `${(position.apy7d * 100).toFixed(2)}%` : '—'}
+              {position.apy7d != null ? `${position.apy7d.toFixed(2)}%` : '—'}
             </p>
           </div>
           <div className="flex-1 text-center">
             <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">30D APY</p>
             <p className="font-bold text-sm text-on-tertiary-container mt-0.5">
-              {`${(position.apy30d * 100).toFixed(2)}%`}
+              {`${position.apy30d.toFixed(2)}%`}
             </p>
           </div>
         </div>
       )}
- 
+
       <div className="grid grid-cols-2 gap-6 mb-4">
         <div>
           <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant block mb-1">Balance</span>
@@ -296,7 +293,7 @@ function PositionCard({ position, bestApy, onDeposit, onWithdraw }) {
           <span className="text-sm font-bold" style={{ color: tag.color }}>{tag.label}</span>
         </div>
       </div>
- 
+
       <div className="flex gap-2 pt-2 border-t border-surface-container">
         <button
           onClick={() => onDeposit(vaultForModal)}
@@ -345,8 +342,9 @@ function DiagnosisSummary({ diagnosis, loading }) {
 }
 
 function BestCrossChainCard({ vault, onDeposit }) {
+  // APY already a % — display directly
   const apy = vault.analytics?.apy?.total != null
-    ? `${(vault.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
+    ? `${vault.analytics.apy.total.toFixed(2)}%` : 'N/A'
   const chainName = vault._chainName ?? vault.network ?? getChainName(vault.chainId)
   const tvlM = Number(vault.analytics?.tvl?.usd ?? 0) >= 1_000_000
     ? `$${(Number(vault.analytics.tvl.usd) / 1e6).toFixed(1)}M`
@@ -392,8 +390,9 @@ function AlternativesTable({ vaults, onDeposit }) {
       </div>
       <div className="divide-y divide-surface-container">
         {vaults.slice(0, 5).map((vault, i) => {
+          // APY already a % — display directly
           const apy = vault.analytics.apy.total != null
-            ? `${(vault.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
+            ? `${vault.analytics.apy.total.toFixed(2)}%` : 'N/A'
           return (
             <div key={i} className="p-4 flex justify-between items-center hover:bg-surface-container-low transition-colors">
               <div>

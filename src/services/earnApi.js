@@ -1,23 +1,4 @@
 // src/services/earnApi.js
-//
-// KEY INSIGHT from docs:
-// The portfolio endpoint returns positions with:
-//   - balanceNative: raw LP token amount (integer string) — use this for withdrawals
-//   - balanceUsd: USD value
-//   - asset.address: the VAULT LP token address (e.g. mUSDC address)
-//   - asset.decimals: the LP token decimals (often 18, NOT underlying decimals!)
-//   - NO apy, apy30d fields
-//
-// APY fix: we call GET /v1/earn/vaults/:chainId/:vaultAddress for each position.
-// The vault endpoint DOES return analytics.apy.total, apy30d, lpTokens, etc.
-//
-// CRITICAL: balanceNative uses LP token decimals (lpTokens[0].decimals), which is
-// often 18 (e.g. mUSDC), NOT the underlying token decimals (e.g. USDC = 6 decimals).
-// Using the wrong decimals causes an off-by-10^12 error in balance display.
-//
-// We pass through lpTokens from the vault response so WithdrawModal can find the
-// correct LP decimals and symbol without any guesswork.
-
 import { getCached, setCached, CACHE_KEYS } from './vaultCache'
 
 const BASE = '/earn-api'
@@ -38,8 +19,8 @@ async function safeFetch(url) {
   return res.json()
 }
 
-// ─── Sanity Filter ────────────────────────────────────────────────────────────
-const ABSOLUTE_MAX_APY = 5.0
+// API returns APY as a percentage already (e.g. 3.8 = 3.8%, NOT 0.038)
+const ABSOLUTE_MAX_APY = 500
 const MIN_TVL_FOR_DISPLAY = 10_000
 
 export function isVaultSane(vault) {
@@ -60,13 +41,13 @@ export function isVaultSane(vault) {
   return true
 }
 
-// ─── Vault Ranking Score ──────────────────────────────────────────────────────
 export function computeVaultRankScore(vault) {
   const apy = vault?.analytics?.apy?.total ?? 0
   const tvl = Number(vault?.analytics?.tvl?.usd ?? 0)
   const apy30d = vault?.analytics?.apy30d
 
-  const apyScore = Math.min(Math.sqrt(apy / 0.5), 1)
+  // Normalize against 50 (50%) since API returns % directly
+  const apyScore = Math.min(Math.sqrt(apy / 50), 1)
   const tvlScore = tvl > 0 ? Math.min(Math.log10(tvl / 10000) / 4, 1) : 0
 
   let stabilityBonus = 0
@@ -78,7 +59,6 @@ export function computeVaultRankScore(vault) {
   return apyScore * 0.50 + tvlScore * 0.35 + stabilityBonus
 }
 
-// ─── Fetch single vault by chainId + address ─────────────────────────────────
 export async function getVaultByAddress(chainId, address) {
   if (!chainId || !address) return null
 
@@ -92,7 +72,6 @@ export async function getVaultByAddress(chainId, address) {
       setCached(cacheKey, data)
       return data
     }
-    console.warn(`[getVaultByAddress] No analytics in response for chain ${chainId} addr ${address.slice(0,10)}`)
     return null
   } catch (err) {
     console.warn(`[getVaultByAddress] Failed for chain ${chainId} addr ${address.slice(0,10)}:`, err.message)
@@ -100,15 +79,6 @@ export async function getVaultByAddress(chainId, address) {
   }
 }
 
-// ─── Portfolio positions with APY enrichment ──────────────────────────────────
-// The Earn API portfolio response does NOT include APY.
-// We fetch each vault individually to get analytics.apy.total, apy30d, lpTokens, etc.
-//
-// IMPORTANT for balance display:
-// - position.asset.address = vault LP token address
-// - position.asset.decimals = LP token decimals (often 18, even for USDC-based vaults)
-// - position.balanceNative = raw LP integer string, divide by LP decimals to get human value
-// - We also pass vaultData.lpTokens through so WithdrawModal can find the correct decimals
 export async function getPortfolioPositions(userAddress) {
   if (!userAddress) return []
 
@@ -127,7 +97,6 @@ export async function getPortfolioPositions(userAddress) {
 
   const enriched = await Promise.allSettled(
     rawPositions.map(async (pos) => {
-      // asset.address is the vault LP token address
       const vaultAddress = pos.asset?.address
       if (!vaultAddress || !pos.chainId) {
         console.warn(`[getPortfolioPositions] Skipping position without address/chainId:`, pos.asset?.symbol)
@@ -137,9 +106,7 @@ export async function getPortfolioPositions(userAddress) {
       const vaultData = await getVaultByAddress(pos.chainId, vaultAddress)
 
       if (!vaultData) {
-        console.warn(`[getPortfolioPositions] Could not enrich ${pos.asset?.symbol} on chain ${pos.chainId} — APY will show N/A`)
-        // Even without vault data, preserve what the portfolio API told us.
-        // pos.asset.decimals IS the LP token decimals — use it for balance display.
+        console.warn(`[getPortfolioPositions] Could not enrich ${pos.asset?.symbol} on chain ${pos.chainId}`)
         return {
           ...pos,
           apy: null,
@@ -150,7 +117,6 @@ export async function getPortfolioPositions(userAddress) {
           vaultName: pos.asset?.name ?? 'Unknown Vault',
           protocolName: pos.protocolName ?? 'Unknown',
           underlyingTokens: [],
-          // Preserve LP token info from portfolio response for decimal math
           lpTokens: pos.asset ? [{
             address: pos.asset.address,
             symbol: pos.asset.symbol,
@@ -161,41 +127,29 @@ export async function getPortfolioPositions(userAddress) {
 
       const enrichedPos = {
         ...pos,
-        // Full vault object for modals — includes lpTokens with correct decimals
         _vaultData: vaultData,
-        // APY fields
         apy: vaultData.analytics?.apy?.total ?? null,
         apy30d: vaultData.analytics?.apy30d ?? null,
         apy7d: vaultData.analytics?.apy7d ?? null,
         apy1d: vaultData.analytics?.apy1d ?? null,
         tvlUsd: Number(vaultData.analytics?.tvl?.usd ?? 0),
-        // Composer support flags
         isTransactional: vaultData.isTransactional,
         isRedeemable: vaultData.isRedeemable,
-        // Vault identity
         vaultAddress,
         vaultName: vaultData.name ?? pos.asset?.name ?? 'Unknown Vault',
         protocolName: vaultData.protocol?.name ?? pos.protocolName ?? 'Unknown',
-        // Underlying tokens (needed for withdraw modal UI display)
         underlyingTokens: vaultData.underlyingTokens ?? [],
-        // LP tokens — CRITICAL for balance display in WithdrawModal.
-        // lpTokens[0].decimals is what balanceNative uses (often 18).
-        // Fall back to portfolio's asset info if vault API didn't return lpTokens.
         lpTokens: vaultData.lpTokens?.length > 0
           ? vaultData.lpTokens
           : pos.asset
             ? [{ address: pos.asset.address, symbol: pos.asset.symbol, decimals: pos.asset.decimals ?? 18 }]
             : [],
-        // balanceNative is already on pos — raw LP token balance string
-        // The decimals to use for it are lpTokens[0].decimals (above)
       }
 
       console.log(
         `[getPortfolioPositions] Enriched ${enrichedPos.vaultName}:`,
-        `APY=${enrichedPos.apy != null ? (enrichedPos.apy * 100).toFixed(2) + '%' : 'N/A'}`,
+        `APY=${enrichedPos.apy != null ? enrichedPos.apy.toFixed(2) + '%' : 'N/A'}`,
         `lpDecimals=${enrichedPos.lpTokens[0]?.decimals ?? 'unknown'}`,
-        `lpSymbol=${enrichedPos.lpTokens[0]?.symbol ?? 'unknown'}`,
-        `balanceNative=${pos.balanceNative}`,
       )
       return enrichedPos
     })
@@ -204,7 +158,6 @@ export async function getPortfolioPositions(userAddress) {
   return enriched.map(r => (r.status === 'fulfilled' ? r.value : r.reason))
 }
 
-// ─── Fetch vaults for a specific chain with caching ───────────────────────────
 export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
   const cacheKey = CACHE_KEYS.chainVaults(chainId)
   const cached = getCached(cacheKey)
@@ -244,7 +197,6 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
   return sorted
 }
 
-// ─── Fetch best vault across ALL chains ──────────────────────────────────────
 export async function getBestVaultAcrossAllChains() {
   const cacheKey = CACHE_KEYS.allChainsBest
   const cached = getCached(cacheKey)
@@ -273,7 +225,6 @@ export async function getBestVaultAcrossAllChains() {
   return best
 }
 
-// ─── Paginated fetch ──────────────────────────────────────────────────────────
 export async function getVaultsPaged({ chainId, pageSize = 20, pageIndex = 0 } = {}) {
   const all = await getVaultsForChain({ chainId })
   const start = pageIndex * pageSize
@@ -285,7 +236,6 @@ export async function getVaultsPaged({ chainId, pageSize = 20, pageIndex = 0 } =
   }
 }
 
-// ─── Legacy vaults helper ─────────────────────────────────────────────────────
 export async function getVaults({
   chainId, asset, protocol, sortBy = 'apy', minTvlUsd = 100_000, limit = 20,
 } = {}) {

@@ -1,4 +1,5 @@
 // src/services/aiDiagnosis.js
+// APY values from API are already percentages (e.g. 3.8 = 3.8%)
 const FIREWORKS_API_KEY = import.meta.env.VITE_FIREWORKS_API_KEY
 
 export async function getDiagnosis({ positions, availableVaults, isNewUser, bestCrossChainVault }) {
@@ -8,25 +9,22 @@ export async function getDiagnosis({ positions, availableVaults, isNewUser, best
         `- ${p.asset?.symbol} via ${p.protocolName}: $${Number(p.balanceUsd || 0).toLocaleString()} balance`
       ).join('\n')
 
-  // Build a vault summary from the top available vaults on current chain
+  // APY is already a % — just append % symbol directly
   const vaultSummary = availableVaults.slice(0, 5).map(v => {
-    const apy = v.analytics.apy.total != null
-      ? `${(v.analytics.apy.total * 100).toFixed(2)}%` : 'N/A'
-    const apy30d = v.analytics.apy30d != null
-      ? `${(v.analytics.apy30d * 100).toFixed(2)}%` : 'N/A'
-    const tvlM = (Number(v.analytics.tvl.usd) / 1e6).toFixed(1)
+    const apy   = v.analytics.apy.total != null ? `${v.analytics.apy.total.toFixed(2)}%` : 'N/A'
+    const apy30d = v.analytics.apy30d != null ? `${v.analytics.apy30d.toFixed(2)}%` : 'N/A'
+    const tvlM  = (Number(v.analytics.tvl.usd) / 1e6).toFixed(1)
     const chainName = v._chainName ?? v.network ?? `Chain ${v.chainId}`
     return `- ${v.name} on ${chainName} (${v.protocol.name}): APY ${apy}, 30d avg ${apy30d}, TVL $${tvlM}M`
   }).join('\n')
 
-  // Best vault across all chains
   let bestVaultLine = ''
   if (bestCrossChainVault) {
-    const bApy = bestCrossChainVault.analytics?.apy?.total != null
-      ? `${(bestCrossChainVault.analytics.apy.total * 100).toFixed(2)}%`
+    const bApy   = bestCrossChainVault.analytics?.apy?.total != null
+      ? `${bestCrossChainVault.analytics.apy.total.toFixed(2)}%`
       : 'N/A'
     const bChain = bestCrossChainVault._chainName ?? bestCrossChainVault.network ?? `Chain ${bestCrossChainVault.chainId}`
-    const bTvl = (Number(bestCrossChainVault.analytics?.tvl?.usd ?? 0) / 1e6).toFixed(1)
+    const bTvl   = (Number(bestCrossChainVault.analytics?.tvl?.usd ?? 0) / 1e6).toFixed(1)
     bestVaultLine = `\nBEST VAULT ACROSS ALL CHAINS: ${bestCrossChainVault.name} on ${bChain} (${bestCrossChainVault.protocol?.name}): APY ${bApy}, TVL $${bTvl}M`
   }
 

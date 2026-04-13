@@ -238,7 +238,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const withdrawEnabled  = vault?.isRedeemable !== false
   const underlyingTokens = vault?.underlyingTokens ?? position?.underlyingTokens ?? []
   const apy              = vault?.analytics?.apy?.total
-  const apyDisplay       = apy != null ? `${(apy * 100).toFixed(2)}%` : 'N/A'
+  const apyDisplay = apy != null ? `${apy.toFixed(2)}%` : 'N/A'
 
   // Resolve LP token info — logged so you can verify in devtools
   const lpDecimals = resolveWithdrawFromDecimals(vault, position)
