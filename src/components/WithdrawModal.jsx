@@ -1,16 +1,4 @@
 // src/components/WithdrawModal.jsx
-//
-// WITHDRAWAL LOGIC:
-// fromToken = vault LP/share token address — from resolveWithdrawFromToken(vault, position)
-// toToken   = destination token user wants to receive
-//
-// resolveWithdrawFromToken priority:
-//   1. vault.lpTokens[0].address  (from vault API — always the LP share token)
-//   2. position.asset.address     (only if not an underlying token)
-//
-// If vault.lpTokens is empty, the vault object was not fully fetched.
-// Check DashboardPage: vaultForModal must use position._vaultData which has lpTokens.
-
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
 import { formatUnits } from 'viem'
@@ -67,6 +55,46 @@ function toRaw(human, decimals) {
   const fp = frac.padEnd(d, '0').slice(0, d)
   try { return (BigInt(whole || '0') * BigInt(10 ** d) + BigInt(fp || '0')).toString() }
   catch { return '0' }
+}
+
+// ─── Quote expiry timer (90 seconds) ─────────────────────────────────────────
+const QUOTE_TTL = 90
+
+function QuoteExpiryTimer({ expiresAt, onExpired }) {
+  const [secondsLeft, setSecondsLeft] = useState(() => {
+    if (!expiresAt) return QUOTE_TTL
+    return Math.max(0, Math.round((expiresAt - Date.now()) / 1000))
+  })
+
+  useEffect(() => {
+    if (!expiresAt) return
+    const tick = setInterval(() => {
+      const left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000))
+      setSecondsLeft(left)
+      if (left === 0) { clearInterval(tick); onExpired?.() }
+    }, 1000)
+    return () => clearInterval(tick)
+  }, [expiresAt, onExpired])
+
+  if (!expiresAt) return null
+
+  const isUrgent = secondsLeft <= 20
+  const progress = secondsLeft / QUOTE_TTL
+
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-colors ${
+      isUrgent ? 'bg-amber-50 border border-amber-200 text-amber-700' : 'bg-surface-container border border-surface-container-high text-on-surface-variant'
+    }`}>
+      <span className={`material-symbols-outlined text-[14px] ${isUrgent ? 'text-amber-500 animate-pulse' : 'text-on-surface-variant'}`}>timer</span>
+      <span>Quote expires in <span className={`font-black tabular-nums ${isUrgent ? 'text-amber-700' : 'text-on-surface'}`}>{secondsLeft}s</span></span>
+      <div className="flex-1 h-1 bg-surface-container-high rounded-full overflow-hidden ml-1">
+        <div
+          className={`h-full rounded-full transition-all duration-1000 ${isUrgent ? 'bg-amber-400' : 'bg-on-tertiary-container/40'}`}
+          style={{ width: `${progress * 100}%` }}
+        />
+      </div>
+    </div>
+  )
 }
 
 function StepRow({ label, status }) {
@@ -240,11 +268,9 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const apy              = vault?.analytics?.apy?.total
   const apyDisplay = apy != null ? `${apy.toFixed(2)}%` : 'N/A'
 
-  // Resolve LP token info — logged so you can verify in devtools
   const lpDecimals = resolveWithdrawFromDecimals(vault, position)
   const lpSymbol   = resolveWithdrawFromSymbol(vault, position)
 
-  // Log on open so you can immediately see what addresses are available
   useEffect(() => {
     console.log('[WithdrawModal] Opened. LP token resolution data:', {
       'vault.lpTokens':             vault?.lpTokens,
@@ -257,19 +283,16 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Balance from portfolio API
   const balanceNativeRaw = position?.balanceNative ?? null
   const balanceUsd       = Number(position?.balanceUsd ?? vault?._positionBalanceUsd ?? 0)
   const { humanBalance: apiBalanceHuman, rawBalance: apiRawBalance } = parseBalanceNative(balanceNativeRaw, lpDecimals)
   const hasApiBalance = apiBalanceHuman > 0
 
-  // On-chain balance fallback (only used if portfolio API gave nothing)
   const [onChainRaw, setOnChainRaw]   = useState(null)
   const [fetchingBal, setFetchingBal] = useState(false)
 
   useEffect(() => {
     if (hasApiBalance || !address) return
-    // Only fetch on-chain if we already know the LP token address
     let lpAddr
     try { lpAddr = resolveWithdrawFromToken(vault, position) } catch { return }
     let cancelled = false
@@ -292,7 +315,6 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     : onChainRaw ? (parseFloat(formatUnits(BigInt(onChainRaw), lpDecimals)) || 0) : 0
   const hasBalance = bestBalanceHuman > 0
 
-  // Form state
   const [withdrawType, setWithdrawType] = useState('partial')
   const [amount, setAmount]             = useState('')
   const [destChainId, setDestChainId]   = useState(vaultChainId)
@@ -300,6 +322,8 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
   const [quote, setQuote]               = useState(null)
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [quoteError, setQuoteError]     = useState(null)
+  const [quoteExpiresAt, setQuoteExpiresAt] = useState(null)
+  const [quoteExpired, setQuoteExpired]     = useState(false)
   const debounceRef                     = useRef(null)
   const [txStep, setTxStep]             = useState('idle')
   const [txHash, setTxHash]             = useState(null)
@@ -315,19 +339,25 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
   const rawAmount = withdrawType === 'full' ? bestRawBalance : toRaw(amount, lpDecimals)
   const isValid   = withdrawType === 'full' || amountNum > 0
-  const quoteReady = !!quote && !quoteLoading && !quoteError
+  const quoteReady = !!quote && !quoteLoading && !quoteError && !quoteExpired
   const canWithdraw = isValid && !isBusy && !!destToken && quoteReady
 
-  // Preview quote
+  const handleQuoteExpired = useCallback(() => {
+    setQuoteExpired(true)
+    setQuote(null)
+    setQuoteExpiresAt(null)
+  }, [])
+
   const fetchQuote = useCallback(async () => {
     if (!isValid || !destToken || !rawAmount || rawAmount === '0') {
-      setQuote(null); setQuoteError(null); return
+      setQuote(null); setQuoteError(null); setQuoteExpiresAt(null); setQuoteExpired(false); return
     }
     let fromTokenAddress
     try { fromTokenAddress = resolveWithdrawFromToken(vault, position) }
     catch (e) { setQuoteError(e.message); setQuote(null); setQuoteLoading(false); return }
 
     setQuoteLoading(true); setQuoteError(null); setQuote(null)
+    setQuoteExpiresAt(null); setQuoteExpired(false)
     try {
       const q = await getWithdrawQuote({
         vaultChainId, destChainId,
@@ -338,6 +368,9 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
         slippage: 0.005,
       })
       setQuote(q)
+      // Start 90-second expiry clock from when quote was received
+      setQuoteExpiresAt(Date.now() + QUOTE_TTL * 1000)
+      setQuoteExpired(false)
     } catch (err) {
       setQuoteError(err.message)
     } finally {
@@ -350,6 +383,17 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
     debounceRef.current = setTimeout(fetchQuote, 700)
     return () => clearTimeout(debounceRef.current)
   }, [fetchQuote])
+
+  // Auto re-fetch after expiry
+  useEffect(() => {
+    if (!quoteExpired) return
+    if (!isValid || !destToken) return
+    const timer = setTimeout(() => {
+      setQuoteExpired(false)
+      fetchQuote()
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [quoteExpired]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const minReceived = quote?.estimate?.toAmountMin
     ? (() => {
@@ -586,14 +630,14 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                   </div>
                   <div className={`relative flex items-center border-2 rounded-xl transition-all ${amountNum > 0 ? 'border-on-tertiary-container/50 bg-surface-container-low' : 'border-surface-container-high bg-surface-container-low hover:border-primary-container/40'}`}>
                     <input ref={inputRef} type="number" min="0" step="any" value={amount}
-                      onChange={e => { setAmount(e.target.value); setError(null); setQuote(null) }}
+                      onChange={e => { setAmount(e.target.value); setError(null); setQuote(null); setQuoteExpiresAt(null); setQuoteExpired(false) }}
                       placeholder="0.00" disabled={isBusy}
                       className="flex-1 px-4 py-3.5 bg-transparent text-xl font-headline font-black text-on-surface outline-none placeholder:text-on-surface-variant/40 disabled:opacity-50" />
                     {hasBalance && (
                       <div className="flex gap-1 pr-3">
-                        <button onClick={() => { setAmount((bestBalanceHuman / 2).toFixed(6)); setQuote(null) }} disabled={isBusy}
+                        <button onClick={() => { setAmount((bestBalanceHuman / 2).toFixed(6)); setQuote(null); setQuoteExpiresAt(null); setQuoteExpired(false) }} disabled={isBusy}
                           className="px-2 py-1 text-[10px] font-black uppercase text-on-surface-variant bg-surface-container rounded-lg hover:bg-surface-container-high disabled:opacity-40">50%</button>
-                        <button onClick={() => { setAmount(bestBalanceHuman.toFixed(Math.min(lpDecimals, 8))); setQuote(null) }} disabled={isBusy}
+                        <button onClick={() => { setAmount(bestBalanceHuman.toFixed(Math.min(lpDecimals, 8))); setQuote(null); setQuoteExpiresAt(null); setQuoteExpired(false) }} disabled={isBusy}
                           className="px-2 py-1 text-[10px] font-black uppercase text-error bg-error/10 rounded-lg hover:bg-error/20 disabled:opacity-40">MAX</button>
                       </div>
                     )}
@@ -612,14 +656,14 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
 
               <div className="space-y-3">
                 <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Receive on</p>
-                <ChainPicker value={destChainId} onChange={(id) => { setDestChainId(id); setDestToken(null); setQuote(null); setError(null) }} label="Destination chain" />
+                <ChainPicker value={destChainId} onChange={(id) => { setDestChainId(id); setDestToken(null); setQuote(null); setQuoteExpiresAt(null); setQuoteExpired(false); setError(null) }} label="Destination chain" />
                 {isCrossChain && (
                   <div className="flex items-center gap-1.5 px-3 py-1.5 bg-on-tertiary-container/10 rounded-lg">
                     <span className="material-symbols-outlined text-on-tertiary-container text-[14px]">bolt</span>
                     <p className="text-[11px] font-bold text-on-tertiary-container">Composer bridges {getChainName(vaultChainId)} → {getChainName(destChainId)} automatically</p>
                   </div>
                 )}
-                <DestTokenPicker chainId={destChainId} walletAddress={address} value={destToken} onChange={(t) => { setDestToken(t); setQuote(null); setError(null) }} />
+                <DestTokenPicker chainId={destChainId} walletAddress={address} value={destToken} onChange={(t) => { setDestToken(t); setQuote(null); setQuoteExpiresAt(null); setQuoteExpired(false); setError(null) }} />
               </div>
 
               {(isValid && destToken) && (
@@ -630,13 +674,19 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                       <p className="text-xs text-on-surface-variant">Checking withdrawal route...</p>
                     </div>
                   )}
-                  {quoteError && !quoteLoading && (
+                  {quoteExpired && !quoteLoading && (
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-amber-500 text-[14px] animate-spin">progress_activity</span>
+                      <p className="text-xs text-amber-700 font-medium">Quote expired — fetching fresh quote...</p>
+                    </div>
+                  )}
+                  {quoteError && !quoteLoading && !quoteExpired && (
                     <div className="flex items-start gap-2">
                       <span className="material-symbols-outlined text-error text-[15px] shrink-0 mt-0.5">error</span>
                       <p className="text-xs font-medium text-error">{quoteError}</p>
                     </div>
                   )}
-                  {quote && !quoteLoading && !quoteError && (
+                  {quote && !quoteLoading && !quoteError && !quoteExpired && (
                     <>
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-on-surface-variant font-medium">Min. received</span>
@@ -658,12 +708,19 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
                         <span className="material-symbols-outlined text-on-tertiary-container text-[12px]">check_circle</span>
                         <p className="text-[10px] font-bold text-on-tertiary-container">Route confirmed via Composer</p>
                       </div>
+
+                      {/* ⏱ Quote expiry timer */}
+                      {quoteExpiresAt && (
+                        <div className="pt-1">
+                          <QuoteExpiryTimer expiresAt={quoteExpiresAt} onExpired={handleQuoteExpired} />
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
               )}
 
-              {priceImpact !== null && priceImpact > 2 && (
+              {priceImpact !== null && priceImpact > 2 && !quoteExpired && (
                 <div className="flex items-center gap-2 p-3 bg-error/5 border border-error/20 rounded-xl">
                   <span className="material-symbols-outlined text-error text-[16px] shrink-0">warning</span>
                   <p className="text-xs font-medium text-on-error-container">High price impact ({priceImpact.toFixed(2)}%). You may receive significantly less than expected.</p>
@@ -773,6 +830,7 @@ export default function WithdrawModal({ vault, position, onClose, onSuccess }) {
               className={`w-full py-4 rounded-2xl font-headline font-black text-base transition-all flex items-center justify-center gap-2
                 ${canWithdraw ? (withdrawType === 'full' ? 'bg-error text-white hover:opacity-90 shadow-md' : 'bg-primary-container text-white hover:opacity-90 shadow-md') : 'bg-surface-container text-on-surface-variant cursor-not-allowed'}`}>
               {quoteLoading && isValid && destToken ? <><span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>Getting route...</>
+                : quoteExpired && isValid && destToken ? <><span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>Refreshing quote...</>
                 : quoteError && isValid && destToken ? <><span className="material-symbols-outlined text-[18px]">block</span>No route available</>
                 : !destToken ? <><span className="material-symbols-outlined text-[18px]">token</span>Select a destination token</>
                 : needsSwitch && canWithdraw ? <><span className="material-symbols-outlined text-[18px]">swap_horiz</span>Switch & Withdraw</>
