@@ -373,7 +373,7 @@ export default function HomePage() {
             <p className="text-sm leading-relaxed">Live vault risk grading and cross-chain deposits for serious DeFi yield seekers.</p>
           </div>
           <div className="space-y-4">
-            <h5 className="text-white text-xs font-black uppercase tracking-widest">Resources</h5>
+            <h5 className="text-white text-xs font-black uppercase tracking-widest">RESOURCES</h5>
             <ul className="space-y-2 text-sm">
               <li><a className="hover:text-white transition-colors" href="/">Explorer</a></li>
               <li><a className="hover:text-white transition-colors" href="https://docs.li.fi/earn/guides/api-integration">Earn API</a></li>
