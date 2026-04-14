@@ -71,7 +71,7 @@ export default function HomePage() {
               >
                 Connect Wallet
               </button>
-              <Link to="/risk-index"
+              <Link to="risk-index"
                 className="flex items-center justify-center gap-2 px-8 py-4 rounded-xl font-bold border-2 border-surface-container-high text-on-surface-variant hover:border-primary-container hover:text-on-surface transition-all"
               >
                 <span className="material-symbols-outlined text-[18px]">verified_user</span>
@@ -330,7 +330,7 @@ export default function HomePage() {
                 <p className="text-sm text-on-primary-container leading-relaxed">
                   Rewards high APY and deep TVL, both with diminishing returns — so a 200% APY vault doesn't automatically beat a rock-solid 8% one.
                 </p>
-                <Link to="/risk-index"
+                <Link to="risk-index"
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-primary-container rounded-xl font-bold text-sm hover:opacity-90 transition-all"
                 >
                   <span className="material-symbols-outlined text-[16px]">open_in_new</span>
@@ -383,8 +383,8 @@ export default function HomePage() {
           <div className="space-y-4">
             <h5 className="text-white text-xs font-black uppercase tracking-widest">Links</h5>
             <ul className="space-y-2 text-sm">
-              <li></li><Link to="/risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link><li/>
-             <li></li><Link to="/api"className="hover:text-on-tertiary-container transition-colors">API</Link><li/>
+              <li></li><Link to="risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link><li/>
+             <li></li><Link to="api"className="hover:text-on-tertiary-container transition-colors">API</Link><li/>
             </ul>
           </div>
           <div className="space-y-4">
