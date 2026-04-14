@@ -1,7 +1,7 @@
 // src/services/earnApi.js
 import { getCached, setCached, CACHE_KEYS } from './vaultCache'
+import { getEarnApiBase } from './apiBase'
 
-const BASE = '/earn-api'
 const API_KEY = import.meta.env.VITE_LIFI_API_KEY
 
 function headers() {
@@ -22,25 +22,18 @@ async function safeFetch(url) {
 const ABSOLUTE_MAX_APY = 500
 const MIN_TVL_HARD = 1_000_000   // $1M — vaults below this are always excluded
 const MIN_APY_HARD = 0.5         // 0.5% — vaults at or below this are always excluded
-const MIN_APY_FOR_LOW_TVL = 1.0  // if TVL < $1M, need at least 1% APY (but MIN_TVL_HARD kills these anyway)
 
 export function isVaultSane(vault) {
   const apy  = vault?.analytics?.apy?.total
   const tvl  = Number(vault?.analytics?.tvl?.usd ?? 0)
   const apy30d = vault?.analytics?.apy30d
 
-  // Must have a valid numeric APY
   if (apy == null || typeof apy !== 'number') return false
   if (apy < 0) return false
   if (apy > ABSOLUTE_MAX_APY) return false
-
-  // Exclude vaults with APY ≤ 0.5% regardless of TVL
   if (apy <= MIN_APY_HARD) return false
-
-  // Exclude vaults with TVL < $1M regardless of APY
   if (tvl < MIN_TVL_HARD) return false
 
-  // Sanity check on 30d vs current (extreme outliers)
   if (apy30d != null && apy30d > 0) {
     const ratio = apy / apy30d
     if (ratio > 10 || ratio < 0.05) return false
@@ -66,13 +59,13 @@ export function computeVaultRankScore(vault) {
   return apyScore * 0.50 + tvlScore * 0.35 + stabilityBonus
 }
 
-// Calls GET /v1/earn/vaults/:chainId/:address
 export async function getVaultByAddress(chainId, address) {
   if (!chainId || !address) return null
   const cacheKey = `vault:single:${chainId}:${address.toLowerCase()}`
   const cached = getCached(cacheKey)
   if (cached) return cached
   try {
+    const BASE = getEarnApiBase()
     const data = await safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
     if (data && data.analytics) {
       setCached(cacheKey, data)
@@ -90,6 +83,7 @@ export async function getPortfolioPositions(userAddress) {
 
   let json
   try {
+    const BASE = getEarnApiBase()
     json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
   } catch (err) {
     console.error('[getPortfolioPositions] Failed:', err.message)
@@ -154,6 +148,7 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
   const cached = getCached(cacheKey)
   if (cached) return cached
 
+  const BASE = getEarnApiBase()
   const all = []
   let cursor = undefined
   let pages = 0
@@ -226,6 +221,7 @@ export async function getVaultsPaged({ chainId, pageSize = 20, pageIndex = 0 } =
 export async function getVaults({
   chainId, asset, protocol, sortBy = 'apy', minTvlUsd = 1_000_000, limit = 20,
 } = {}) {
+  const BASE = getEarnApiBase()
   const params = new URLSearchParams()
   if (chainId) params.set('chainId', String(chainId))
   if (asset) params.set('asset', asset)
@@ -241,6 +237,7 @@ export async function getVaults({
 }
 
 export async function getVaultById(chainId, address) {
+  const BASE = getEarnApiBase()
   return safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
 }
 
@@ -248,11 +245,13 @@ export async function getSupportedChains() {
   const cacheKey = CACHE_KEYS.chains
   const cached = getCached(cacheKey)
   if (cached) return cached
+  const BASE = getEarnApiBase()
   const data = await safeFetch(`${BASE}/v1/earn/chains`)
   setCached(cacheKey, data)
   return data
 }
 
 export async function getProtocols() {
+  const BASE = getEarnApiBase()
   return safeFetch(`${BASE}/v1/earn/protocols`)
 }

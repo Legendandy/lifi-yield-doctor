@@ -1,14 +1,6 @@
 // src/services/executeDeposit.js
-//
-// CRITICAL FIX: Composer only triggers when toToken === a supported vault address.
-// When the vault is NOT Composer-supported cross-chain, the API silently returns
-// a plain bridge/swap route (toToken = USDC on dest chain, NOT the vault share).
-// We validate the returned toToken before executing to prevent fund loss.
-//
-// PARTIAL substatus = bridge succeeded but vault deposit failed on destination.
-// User ends up with raw tokens on dest chain, not vault shares. We detect this.
-
 import { ethers } from 'ethers'
+import { getLifiApiBase } from './apiBase'
 
 const ERC20_ABI = [
   'function approve(address spender, uint256 amount) returns (bool)',
@@ -25,13 +17,6 @@ export function isNativeToken(address) {
   return NATIVE_ADDRESSES.has(address.toLowerCase())
 }
 
-function getLifiBase() {
-  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-    return '/lifi-api'
-  }
-  return 'https://li.quest'
-}
-
 export function toRawAmount(humanAmount, decimals) {
   if (!humanAmount || isNaN(parseFloat(humanAmount))) return '0'
   const str = String(humanAmount).trim()
@@ -45,10 +30,8 @@ export function toRawAmount(humanAmount, decimals) {
 }
 
 /**
- * Check that the quote's final toToken matches the vault address.
- * If not, Composer did NOT trigger — the API fell back to a plain bridge/swap.
- * Executing such a quote would send tokens to the destination chain without
- * depositing them into the vault.
+ * Validates that the Composer quote's toToken matches the vault address.
+ * If not, the API returned a plain bridge/swap — NOT a vault deposit.
  */
 export function validateComposerQuote(quote, vaultAddress) {
   const returnedTo = quote?.action?.toToken?.address?.toLowerCase()
@@ -86,7 +69,7 @@ export async function getComposerQuote({
   const reqHeaders = { 'Content-Type': 'application/json' }
   if (apiKey) reqHeaders['x-lifi-api-key'] = apiKey
 
-  const base = getLifiBase()
+  const base = getLifiApiBase()
   console.log('[Composer] Quote:', { fromChain, toChain, slippage, rawAmount })
 
   const res = await fetch(`${base}/v1/quote?${params}`, { headers: reqHeaders })
@@ -137,24 +120,19 @@ export async function executeDeposit({
   const quote = await getComposerQuote({
     fromChain: walletChainId, toChain: destChainId,
     fromToken: fromToken.address,
-    toToken:   vault.address,  // vault share token triggers Composer
+    toToken:   vault.address,
     fromAddress: userAddress,
     fromAmount: String(fromAmount),
     apiKey, slippage,
   })
 
-  // ── CRITICAL SAFETY CHECK ──────────────────────────────────────────────────
-  // If the returned toToken != vault.address, Composer did NOT trigger.
-  // The route is a plain bridge/swap — executing would give the user raw tokens
-  // on the destination chain instead of vault shares. Block it.
+  // CRITICAL SAFETY CHECK: ensure Composer actually triggered (toToken === vault)
   const validation = validateComposerQuote(quote, vault.address)
   if (!validation.valid) {
-    throw new Error(
-      `COMPOSER_NOT_TRIGGERED:${validation.returnedSymbol}`
-    )
+    throw new Error(`COMPOSER_NOT_TRIGGERED:${validation.returnedSymbol}`)
   }
 
-  // ── Approval ───────────────────────────────────────────────────────────────
+  // Approval
   const native = isNativeToken(fromToken.address)
   if (!native && quote.estimate?.approvalAddress) {
     const erc20   = new ethers.Contract(fromToken.address, ERC20_ABI, signer)
@@ -170,7 +148,7 @@ export async function executeDeposit({
     } else { onApprovalDone?.() }
   } else { onApprovalDone?.() }
 
-  // ── Execute ────────────────────────────────────────────────────────────────
+  // Execute
   const tx = await signer.sendTransaction(quote.transactionRequest)
   onDepositSent?.(tx.hash)
   const receipt = await tx.wait()
@@ -184,7 +162,7 @@ export async function executeDeposit({
 export async function pollCrossChainStatus(txHash, fromChain, toChain, apiKey, maxAttempts = 60) {
   const reqHeaders = {}
   if (apiKey) reqHeaders['x-lifi-api-key'] = apiKey
-  const base = getLifiBase()
+  const base = getLifiApiBase()
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(r => setTimeout(r, 5000))
     try {

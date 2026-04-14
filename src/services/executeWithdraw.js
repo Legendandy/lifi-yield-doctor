@@ -1,29 +1,12 @@
 // src/services/executeWithdraw.js
-//
-// WITHDRAWAL: fromToken = vault LP/share token, toToken = what user wants to receive
-//
-// For ERC-4626 vaults (Morpho, Euler, Yearn, etc.), the vault contract address IS
-// the share token. When you deposit, the vault mints share tokens to you from its
-// own contract address. So vault.address === LP share token address.
-//
-// Resolution order:
-//   1. vault.lpTokens[0].address  — explicit LP share token from vault API
-//   2. vault.address              — for ERC-4626 vaults, this IS the share token
-//   3. position.asset.address     — only if it's NOT an underlying token
-//   4. throw
-
 import { ethers } from 'ethers'
+import { getLifiApiBase } from './apiBase'
 
 const ERC20_ABI = [
   'function approve(address spender, uint256 amount) returns (bool)',
   'function allowance(address owner, address spender) view returns (uint256)',
   'function balanceOf(address owner) view returns (uint256)',
 ]
-
-function getLifiBase() {
-  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') return '/lifi-api'
-  return 'https://li.quest'
-}
 
 function getLifiHeaders() {
   const h = { 'Content-Type': 'application/json' }
@@ -34,44 +17,24 @@ function getLifiHeaders() {
 
 /**
  * Resolve the vault LP/share token address to use as fromToken for withdrawal.
- *
- * For ERC-4626 vaults, depositing mints share tokens from the vault contract itself.
- * So vault.address IS the share token you received. This is the standard for
- * Morpho, Euler, Yearn, Beefy, and most modern DeFi vaults.
- *
- * Priority:
- *   1. vault.lpTokens[0].address  — explicit from vault API (most accurate)
- *   2. vault.address              — ERC-4626 share token (the vault IS the token)
- *   3. position.asset.address     — only if NOT an underlying token
  */
 export function resolveWithdrawFromToken(vault, position) {
-  // 1. Best source: vault.lpTokens from the vault API
   if (vault?.lpTokens?.length > 0 && vault.lpTokens[0]?.address) {
     return vault.lpTokens[0].address
   }
-
-  // 2. vault.address — for ERC-4626 vaults, this IS the share token contract.
-  //    When you deposit into a vault, it mints share tokens TO YOU from this address.
-  //    This is the correct fromToken for withdrawals on Morpho, Euler, Yearn, etc.
   if (vault?.address) {
     return vault.address
   }
-
-  // 3. position.asset.address — only if it's NOT an underlying token
   if (position?.asset?.address) {
     const assetAddr   = position.asset.address.toLowerCase()
     const assetSymbol = (position.asset.symbol ?? '').toUpperCase()
-
     const underlyingAddrs   = (vault?.underlyingTokens ?? []).map(t => (t.address ?? '').toLowerCase()).filter(Boolean)
     const underlyingSymbols = (vault?.underlyingTokens ?? []).map(t => (t.symbol ?? '').toUpperCase()).filter(Boolean)
-
     const isUnderlying = underlyingAddrs.includes(assetAddr) || underlyingSymbols.includes(assetSymbol)
-
     if (!isUnderlying) {
       return position.asset.address
     }
   }
-
   throw new Error(
     `Cannot find the vault share token for "${vault?.name ?? 'this vault'}". ` +
     `vault.address is missing, vault.lpTokens is empty, and position.asset is an underlying token.`
@@ -93,7 +56,7 @@ export function resolveWithdrawFromSymbol(vault, position) {
 
 /**
  * Fetch a Composer withdrawal quote.
- * fromToken = vault share token (resolveWithdrawFromToken result)
+ * fromToken = vault share token
  * toToken   = destination token the user wants
  */
 export async function getWithdrawQuote({
@@ -130,7 +93,8 @@ export async function getWithdrawQuote({
     integrator:  'yield-doctor',
   })
 
-  const res = await fetch(`${getLifiBase()}/v1/quote?${params}`, { headers: getLifiHeaders() })
+  const base = getLifiApiBase()
+  const res = await fetch(`${base}/v1/quote?${params}`, { headers: getLifiHeaders() })
 
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText)
