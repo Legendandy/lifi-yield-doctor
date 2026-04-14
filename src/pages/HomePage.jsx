@@ -40,7 +40,7 @@ export default function HomePage() {
         </div>
         <div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-on-surface-variant">
           <Link to="/risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link>
-          <a className="hover:text-on-tertiary-container transition-colors" href="/api">API</a>
+            <Link to="/api"className="hover:text-on-tertiary-container transition-colors">API</Link>
         </div>
         <button
           onClick={handleConnect}
@@ -71,13 +71,12 @@ export default function HomePage() {
               >
                 Connect Wallet
               </button>
-              <a
-                href="/risk-index"
+              <Link to="/risk-index"
                 className="flex items-center justify-center gap-2 px-8 py-4 rounded-xl font-bold border-2 border-surface-container-high text-on-surface-variant hover:border-primary-container hover:text-on-surface transition-all"
               >
                 <span className="material-symbols-outlined text-[18px]">verified_user</span>
                 How risk is scored
-              </a>
+              </Link>
             </div>
           </div>
 
@@ -331,13 +330,12 @@ export default function HomePage() {
                 <p className="text-sm text-on-primary-container leading-relaxed">
                   Rewards high APY and deep TVL, both with diminishing returns — so a 200% APY vault doesn't automatically beat a rock-solid 8% one.
                 </p>
-                <a
-                  href="/risk-index"
+                <Link to="/risk-index"
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-primary-container rounded-xl font-bold text-sm hover:opacity-90 transition-all"
                 >
                   <span className="material-symbols-outlined text-[16px]">open_in_new</span>
                   Read full methodology
-                </a>
+                </Link>
               </div>
             </div>
           </div>
@@ -375,7 +373,7 @@ export default function HomePage() {
             <p className="text-sm leading-relaxed">Live vault risk grading and cross-chain deposits for serious DeFi yield seekers.</p>
           </div>
           <div className="space-y-4">
-            <h5 className="text-white text-xs font-black uppercase tracking-widest">Platform</h5>
+            <h5 className="text-white text-xs font-black uppercase tracking-widest">Resources</h5>
             <ul className="space-y-2 text-sm">
               <li><a className="hover:text-white transition-colors" href="/">Explorer</a></li>
               <li><a className="hover:text-white transition-colors" href="https://docs.li.fi/earn/guides/api-integration">Earn API</a></li>
@@ -383,10 +381,10 @@ export default function HomePage() {
             </ul>
           </div>
           <div className="space-y-4">
-            <h5 className="text-white text-xs font-black uppercase tracking-widest">Resources</h5>
+            <h5 className="text-white text-xs font-black uppercase tracking-widest">Links</h5>
             <ul className="space-y-2 text-sm">
-              <li><a className="hover:text-white transition-colors" href="/risk-index">Risk Methodology</a></li>
-              <li><a className="hover:text-white transition-colors" href="/api">API Docs</a></li>
+              <li></li><Link to="/risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link><li/>
+             <li></li><Link to="/api"className="hover:text-on-tertiary-container transition-colors">API</Link><li/>
             </ul>
           </div>
           <div className="space-y-4">
@@ -414,7 +412,7 @@ export default function HomePage() {
           </div>
         </div>
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center text-[10px] font-bold uppercase tracking-widest gap-4">
-          <p>© 2024 Yield Doctor. Not financial advice.</p>
+          <p>© 2026 Yield Doctor. Not financial advice.</p>
           <div className="flex gap-8">
             <a className="hover:text-white transition-colors" href="#">Privacy Policy</a>
             <a className="hover:text-white transition-colors" href="#">Terms of Service</a>
