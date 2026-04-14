@@ -13,8 +13,8 @@ export default function RiskIndexPage() {
           <span className="text-xl font-extrabold tracking-tighter">Yield Doctor</span>
         </a>
         <div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-on-surface-variant">
-          <Link to="risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link>
-            <Link to="api"className="hover:text-on-tertiary-container transition-colors">API</Link>
+          <Link to="/risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link>
+            <Link to="/api"className="hover:text-on-tertiary-container transition-colors">API</Link>
         </div>
         <a
           href="/"
