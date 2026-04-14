@@ -376,9 +376,9 @@ export default function HomePage() {
           <div className="space-y-4">
             <h5 className="text-white text-xs font-black uppercase tracking-widest">Platform</h5>
             <ul className="space-y-2 text-sm">
-              <li><a className="hover:text-white transition-colors" href="/vaults">Vault Explorer</a></li>
-              <li><a className="hover:text-white transition-colors" href="/compare">Compare Vaults</a></li>
-              <li><a className="hover:text-white transition-colors" href="/dashboard">My Positions</a></li>
+              <li><a className="hover:text-white transition-colors" href="/">Explorer</a></li>
+              <li><a className="hover:text-white transition-colors" href="https://docs.li.fi/earn/guides/api-integration">Earn API</a></li>
+              <li><a className="hover:text-white transition-colors" href="https://yields.llama.fi/pools">Defillama Pool</a></li>
             </ul>
           </div>
           <div className="space-y-4">
