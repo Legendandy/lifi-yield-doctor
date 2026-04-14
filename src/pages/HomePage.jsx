@@ -1,6 +1,7 @@
 // src/pages/HomePage.jsx
 import { useConnectModal } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
+import { Link } from "react-router-dom"
 
 function XLogo({ className = '' }) {
   return (
@@ -38,7 +39,7 @@ export default function HomePage() {
           <span className="text-xl font-extrabold tracking-tighter">Yield Doctor</span>
         </div>
         <div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-on-surface-variant">
-          <a className="hover:text-on-tertiary-container transition-colors" href="/risk-index">Risk Index</a>
+          <Link to="/risk-index"className="hover:text-on-tertiary-container transition-colors">Risk Index</Link>
           <a className="hover:text-on-tertiary-container transition-colors" href="/api">API</a>
         </div>
         <button
