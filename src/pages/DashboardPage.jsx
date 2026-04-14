@@ -210,8 +210,8 @@ function VaultDetailModal({ vault, riskData, llamaPool, onClose, onDeposit, onCo
   )
 }
 
-// ─── Recommended Vaults (Top 10 highest APY, TVL > $10M, across all chains) ──
-function RecommendedVaults({ onDeposit, onWithdraw, onVaultClick }) {
+// ─── Recommended Vaults ───────────────────────────────────────────────────────
+function RecommendedVaults({ onDeposit, onVaultClick }) {
   const [vaults, setVaults] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -235,9 +235,7 @@ function RecommendedVaults({ onDeposit, onWithdraw, onVaultClick }) {
           .sort((a, b) => (b.analytics?.apy?.total ?? 0) - (a.analytics?.apy?.total ?? 0))
           .slice(0, 10)
         setVaults(all)
-      } catch (e) {
-        console.error('RecommendedVaults load error:', e)
-      } finally {
+      } catch { /* silent */ } finally {
         if (!cancelled) setLoading(false)
       }
     }
@@ -320,7 +318,6 @@ function DashboardFilterBar({ positions, filters, onFiltersChange }) {
 
   return (
     <div className="flex flex-wrap items-center gap-3 p-4 bg-surface-container-lowest rounded-xl border border-surface-container clinical-shadow mb-4">
-      {/* Chain filter */}
       {chains.length > 1 && (
         <div className="flex items-center gap-2">
           <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Chain</label>
@@ -332,7 +329,6 @@ function DashboardFilterBar({ positions, filters, onFiltersChange }) {
         </div>
       )}
 
-      {/* Protocol filter */}
       {protocols.length > 1 && (
         <div className="flex items-center gap-2">
           <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Protocol</label>
@@ -344,7 +340,6 @@ function DashboardFilterBar({ positions, filters, onFiltersChange }) {
         </div>
       )}
 
-      {/* Asset filter */}
       {assets.length > 1 && (
         <div className="flex items-center gap-2">
           <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0">Asset</label>
@@ -380,11 +375,7 @@ export default function DashboardPage() {
   const [hasPositions, setHasPositions] = useState(false)
   const [depositModal, setDepositModal] = useState(null)
   const [withdrawModal, setWithdrawModal] = useState(null)
-
-  // Filters for positions
   const [filters, setFilters] = useState({ chain: '', protocol: '', asset: '' })
-
-  // Vault detail modal state
   const [detailVault, setDetailVault] = useState(null)
   const [detailRiskData, setDetailRiskData] = useState(null)
   const [detailLlamaPool, setDetailLlamaPool] = useState(null)
@@ -404,7 +395,6 @@ export default function DashboardPage() {
       setHasPositions(hasAny)
       setPositions(userPositions || [])
     } catch (err) {
-      console.error('Dashboard load error:', err)
       setError(err.message)
     } finally {
       setLoading(false)
@@ -421,9 +411,7 @@ export default function DashboardPage() {
       const pool = matchVaultToPool(vault, pools)
       setDetailLlamaPool(pool)
       setDetailRiskData(pool ? computeRiskScore(vault, pool) : null)
-    } catch (e) {
-      console.warn('Risk data fetch failed:', e.message)
-    } finally {
+    } catch { /* silent */ } finally {
       setDetailLoading(false)
     }
   }
@@ -432,7 +420,6 @@ export default function DashboardPage() {
     navigate('/compare', { state: { vaultA: vault } })
   }
 
-  // Filter positions
   const filteredPositions = positions.filter(pos => {
     if (filters.chain && String(pos.chainId) !== String(filters.chain)) return false
     const proto = pos.protocolName ?? pos._vaultData?.protocol?.name ?? ''
@@ -449,7 +436,7 @@ export default function DashboardPage() {
       <header className="flex justify-between items-end mb-8">
         <div>
           <h1 className="text-3xl font-headline font-extrabold tracking-tight text-on-surface">Your Positions</h1>
-          <p className="text-on-surface-variant font-medium mt-1">Real-time clinical monitoring of active vaults.</p>
+          <p className="text-on-surface-variant font-medium mt-1">Real-time monitoring of your active vaults.</p>
         </div>
         <div className="flex items-center gap-3">
           {!loading && !error && (
@@ -476,7 +463,6 @@ export default function DashboardPage() {
               <NoPositionsState onGoToVaults={() => navigate('/vaults')} />
             ) : (
               <>
-                {/* Filter bar — only shown when there are positions */}
                 <DashboardFilterBar positions={positions} filters={filters} onFiltersChange={setFilters} />
 
                 {filteredPositions.length === 0 ? (
@@ -488,12 +474,7 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   filteredPositions.map((pos, i) => (
-                    <PositionCard
-                      key={i}
-                      position={pos}
-                      onDeposit={(vault) => setDepositModal(vault)}
-                      onWithdraw={(vault, position) => setWithdrawModal({ vault, position })}
-                    />
+                    <PositionCard key={i} position={pos} />
                   ))
                 )}
               </>
@@ -503,7 +484,6 @@ export default function DashboardPage() {
           <section className="col-span-12 lg:col-span-5 space-y-6">
             <RecommendedVaults
               onDeposit={(vault) => setDepositModal(vault)}
-              onWithdraw={(vault) => setWithdrawModal({ vault, position: null })}
               onVaultClick={handleVaultClick}
             />
           </section>
@@ -572,29 +552,16 @@ function NoPositionsState({ onGoToVaults }) {
   )
 }
 
-function PositionCard({ position, onDeposit, onWithdraw }) {
+// ─── Position Card — no deposit button ───────────────────────────────────────
+function PositionCard({ position }) {
   const chainName = getChainName(position.chainId)
   const protocolName = position.protocolName ?? 'Unknown'
   const vaultName = position.vaultName ?? `${position.asset?.symbol ?? 'Unknown'} Vault`
   const balanceUsd = Number(position.balanceUsd || 0)
 
-  const vaultForModal = position._vaultData ?? {
-    name: vaultName,
-    protocol: { name: protocolName },
-    network: chainName,
-    chainId: position.chainId,
-    address: position.vaultAddress ?? position.asset?.address ?? '',
-    analytics: {
-      apy: { total: null },
-      apy30d: null,
-      tvl: { usd: position.tvlUsd ?? 0 },
-    },
-    underlyingTokens: position.underlyingTokens ?? (position.asset ? [position.asset] : []),
-  }
-
   return (
-    <div className="bg-surface-container-lowest p-6 rounded-xl clinical-shadow hover:bg-surface-container-low transition-colors">
-      <div className="flex justify-between items-start mb-4">
+    <div className="bg-surface-container-lowest p-6 rounded-xl clinical-shadow">
+      <div className="flex justify-between items-start">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-surface-container flex items-center justify-center">
             <span className="material-symbols-outlined text-on-surface-variant">toll</span>
@@ -613,7 +580,7 @@ function PositionCard({ position, onDeposit, onWithdraw }) {
       </div>
 
       {position.underlyingTokens?.length > 0 && (
-        <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <div className="flex items-center gap-2 mt-4 flex-wrap">
           {position.underlyingTokens.map((t, i) => (
             <span key={i} className="flex items-center gap-1 px-2.5 py-1 bg-surface-container rounded-full text-xs font-bold text-on-surface-variant">
               {t.logoURI && <img src={t.logoURI} alt={t.symbol} className="w-3.5 h-3.5 rounded-full" onError={e => { e.target.style.display = 'none' }} />}
@@ -622,16 +589,6 @@ function PositionCard({ position, onDeposit, onWithdraw }) {
           ))}
         </div>
       )}
-
-      {/* Action buttons — Deposit only; Withdraw removed from position card */}
-      <div className="flex gap-2 pt-2 border-t border-surface-container">
-        <button
-          onClick={() => onDeposit(vaultForModal)}
-          className="flex-1 py-2 rounded-xl text-xs font-black bg-primary-container text-white hover:opacity-90 transition-all flex items-center justify-center gap-1.5">
-          <span className="material-symbols-outlined text-[14px]">add_circle</span>
-          Deposit More
-        </button>
-      </div>
     </div>
   )
 }

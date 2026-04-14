@@ -1,7 +1,7 @@
+// src/pages/HomePage.jsx
 import { useConnectModal } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
 
-// X (Twitter) SVG logo
 function XLogo({ className = '' }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -10,7 +10,6 @@ function XLogo({ className = '' }) {
   )
 }
 
-// Discord SVG logo
 function DiscordLogo({ className = '' }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -19,16 +18,12 @@ function DiscordLogo({ className = '' }) {
   )
 }
 
-export default function HomePage({ onConnected }) {
+export default function HomePage() {
   const { openConnectModal } = useConnectModal()
   const { isConnected } = useAccount()
 
-  function handleRunDiagnosis() {
-    if (isConnected) {
-      onConnected?.()
-    } else {
-      openConnectModal()
-    }
+  function handleConnect() {
+    if (!isConnected) openConnectModal()
   }
 
   return (
@@ -43,22 +38,11 @@ export default function HomePage({ onConnected }) {
           <span className="text-xl font-extrabold tracking-tighter">Yield Doctor</span>
         </div>
         <div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-on-surface-variant">
-          <a
-    href="#"
-    onClick={(e) => {
-      e.preventDefault()
-      handleRunDiagnosis()
-    }}
-    className="hover:text-on-tertiary-container transition-colors"
-  >
-    Portfolio Scan
-  </a>
-
           <a className="hover:text-on-tertiary-container transition-colors" href="/risk-index">Risk Index</a>
           <a className="hover:text-on-tertiary-container transition-colors" href="/api">API</a>
         </div>
         <button
-          onClick={handleRunDiagnosis}
+          onClick={handleConnect}
           className="px-5 py-2 bg-primary-container text-white text-sm font-bold rounded-full hover:bg-slate-800 transition-all active:scale-95"
         >
           Connect Wallet
@@ -66,141 +50,110 @@ export default function HomePage({ onConnected }) {
       </nav>
 
       {/* Hero */}
-      <section className="relative pt-32 pb-20 px-6 hero-gradient overflow-hidden">
+      <section className="relative pt-32 pb-20 px-6 overflow-hidden">
         <div className="max-w-7xl mx-auto grid lg:grid-cols-2 gap-16 items-center">
           <div className="space-y-8">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 text-[10px] font-bold tracking-widest uppercase">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              Now Analyzing 1,200+ Protocols
+              Live across 17 chains · 600+ vaults
             </div>
             <h1 className="text-5xl md:text-7xl font-extrabold tracking-tighter leading-[1.05] text-on-surface">
-              Diagnose. Fix. Profit. — Your DeFi Portfolio's{' '}
-              <span className="text-on-tertiary-container">AI Doctor</span>
+              The smarter way to <span className="text-on-tertiary-container">deploy DeFi yield.</span>
             </h1>
             <p className="text-xl text-on-surface-variant font-medium leading-relaxed max-w-xl">
-              AI-powered analysis that scans your portfolio, detects hidden risks, and unlocks higher yield in seconds.
+              Browse, compare, and deposit into the best yield vaults across 17 chains — with live risk grading and one-click cross-chain deposits via LI.FI Composer.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3 max-w-lg">
+            <div className="flex flex-col sm:flex-row gap-3">
               <button
-                onClick={handleRunDiagnosis}
+                onClick={handleConnect}
                 className="bg-primary-container text-white px-8 py-4 rounded-xl font-bold hover:shadow-lg transition-all active:scale-95"
               >
-                Run Diagnosis
+                Connect Wallet
               </button>
-            </div>
-            <div className="flex items-center gap-6">
-              <button className="flex items-center gap-2 text-sm font-bold text-on-surface-variant hover:text-on-tertiary-container">
-                <span className="material-symbols-outlined text-lg">play_circle</span>
-                View Demo Report
-              </button>
-              <div className="h-4 w-px bg-outline-variant"></div>
-              <div className="flex items-center -space-x-2">
-                <div className="w-8 h-8 rounded-full border-2 border-white bg-surface-container flex items-center justify-center text-xs font-bold text-on-surface-variant">A</div>
-                <div className="w-8 h-8 rounded-full border-2 border-white bg-surface-container-high flex items-center justify-center text-xs font-bold text-on-surface-variant">D</div>
-                <div className="w-8 h-8 rounded-full border-2 border-white bg-surface-container-highest flex items-center justify-center text-xs font-bold text-on-surface">S</div>
-                <span className="ml-4 text-xs font-bold text-on-surface-variant">Trusted by 12,000+ investors</span>
-              </div>
+              <a
+                href="/risk-index"
+                className="flex items-center justify-center gap-2 px-8 py-4 rounded-xl font-bold border-2 border-surface-container-high text-on-surface-variant hover:border-primary-container hover:text-on-surface transition-all"
+              >
+                <span className="material-symbols-outlined text-[18px]">verified_user</span>
+                How risk is scored
+              </a>
             </div>
           </div>
 
-          {/* Hero Mockup */}
+          {/* Hero card mockup */}
           <div className="relative">
             <div className="absolute -inset-4 bg-emerald-200 blur-[100px] rounded-full opacity-30"></div>
-            <div className="relative glass rounded-3xl p-6 shadow-2xl border border-white/50 space-y-6">
+            <div className="relative glass rounded-3xl p-6 shadow-2xl border border-white/50 space-y-5">
               <div className="flex justify-between items-center pb-4 border-b border-outline-variant/50">
                 <div className="flex gap-2">
                   <div className="w-3 h-3 rounded-full bg-red-400/30"></div>
                   <div className="w-3 h-3 rounded-full bg-amber-400/30"></div>
                   <div className="w-3 h-3 rounded-full bg-green-400/30"></div>
                 </div>
-                <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Live Analysis Preview</span>
+                <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Vault Explorer Preview</span>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-surface-container-lowest p-5 rounded-2xl border border-surface-container shadow-sm">
-                  <p className="text-[10px] font-bold text-on-surface-variant uppercase">Portfolio Health</p>
-                  <div className="flex items-baseline gap-2 mt-1">
-                    <span className="text-3xl font-black text-on-surface">84%</span>
-                    <span className="text-xs font-bold text-on-tertiary-container">↑ 12%</span>
-                  </div>
-                </div>
-                <div className="bg-surface-container-lowest p-5 rounded-2xl border border-surface-container shadow-sm">
-                  <p className="text-[10px] font-bold text-on-surface-variant uppercase">Current APY</p>
-                  <div className="flex items-baseline gap-2 mt-1">
-                    <span className="text-3xl font-black text-on-surface">14.2%</span>
-                    <span className="text-xs font-bold text-on-tertiary-container">Optimal</span>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-3 bg-surface-container rounded-xl border border-surface-container-high">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-secondary-container rounded-lg flex items-center justify-center text-on-secondary-container">
-                      <span className="material-symbols-outlined text-sm">water_drop</span>
+
+              {/* Simulated vault rows */}
+              {[
+                { name: 'Morpho USDC Vault', protocol: 'Morpho', chain: 'Base', apy: '8.41%', grade: 'A', gradeColor: '#009844', gradeBg: 'rgba(0,152,68,0.10)' },
+                { name: 'Euler WETH Prime', protocol: 'Euler', chain: 'Ethereum', apy: '5.22%', grade: 'A', gradeColor: '#009844', gradeBg: 'rgba(0,152,68,0.10)' },
+                { name: 'Pendle PT-USDe', protocol: 'Pendle', chain: 'Arbitrum', apy: '14.87%', grade: 'B', gradeColor: '#d97706', gradeBg: 'rgba(217,119,6,0.10)' },
+              ].map((v, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-surface-container rounded-xl border border-surface-container-high">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 bg-surface-container-high rounded-lg flex items-center justify-center shrink-0">
+                      <span className="material-symbols-outlined text-on-surface-variant text-[14px]">account_balance</span>
                     </div>
-                    <div>
-                      <p className="text-xs font-bold">Lido Staked ETH</p>
-                      <p className="text-[10px] text-on-surface-variant">No risks detected</p>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-on-surface truncate">{v.name}</p>
+                      <p className="text-[10px] text-on-surface-variant">{v.protocol} · {v.chain}</p>
                     </div>
                   </div>
-                  <span className="text-xs font-black text-on-tertiary-container">3.8% APY</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-error-container/30 rounded-xl border border-error-container/50">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-error-container rounded-lg flex items-center justify-center text-on-error-container">
-                      <span className="material-symbols-outlined text-sm">warning</span>
-                    </div>
-                    <div>
-                      <p className="text-xs font-bold">Curve Tricrypto</p>
-                      <p className="text-[10px] text-error">Impermanent loss risk high</p>
-                    </div>
-                  </div>
-                  <span className="text-xs font-black text-error">Migrate?</span>
-                </div>
-              </div>
-              <div className="absolute -bottom-6 -right-6 bg-primary-container text-white p-4 rounded-2xl shadow-xl animate-bounce">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-on-tertiary-container rounded-full flex items-center justify-center">
-                    <span className="material-symbols-outlined">auto_graph</span>
-                  </div>
-                  <div>
-                    <p className="text-[10px] opacity-60 font-bold">Potential Gain</p>
-                    <p className="text-sm font-bold">+$2,480 / Year</p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-black text-sm text-on-tertiary-container">{v.apy}</span>
+                    <span
+                      className="inline-flex items-center justify-center w-6 h-6 text-xs font-black rounded-lg border"
+                      style={{ color: v.gradeColor, background: v.gradeBg, borderColor: v.gradeColor + '55' }}
+                    >{v.grade}</span>
                   </div>
                 </div>
+              ))}
+
+              <div className="flex items-center justify-between pt-1">
+                <p className="text-[10px] text-on-surface-variant font-medium">Risk grades powered by DeFiLlama</p>
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-on-tertiary-container/10 text-on-tertiary-container px-2 py-1 rounded-full">
+                  <span className="material-symbols-outlined text-[10px]">bolt</span>Cross-chain
+                </span>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Social Proof Bar */}
-      <div className="py-12 border-y border-surface-container bg-surface-container-low/50">
+      {/* Stats bar */}
+      <div className="py-10 border-y border-surface-container bg-surface-container-low/50">
         <div className="max-w-7xl mx-auto px-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-8 items-center opacity-50">
-            <div className="flex justify-center text-lg font-black tracking-tighter text-on-surface">ETHEREUM</div>
-            <div className="flex justify-center text-lg font-black tracking-tighter text-on-surface">ARBITRUM</div>
-            <div className="flex justify-center text-lg font-black tracking-tighter text-on-surface">BASE</div>
-            <div className="hidden lg:flex flex-col items-center">
-              <span className="text-lg font-black text-on-surface leading-none">$120M+</span>
-              <span className="text-[10px] uppercase font-bold text-on-surface-variant">Analyzed</span>
-            </div>
-            <div className="hidden lg:flex flex-col items-center">
-              <span className="text-lg font-black text-on-surface leading-none">18%</span>
-              <span className="text-[10px] uppercase font-bold text-on-surface-variant">Avg APY Boost</span>
-            </div>
-            <div className="hidden lg:flex flex-col items-center">
-              <span className="text-lg font-black text-on-surface leading-none">400+</span>
-              <span className="text-[10px] uppercase font-bold text-on-surface-variant">Protocols</span>
-            </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+            {[
+              { value: '17', label: 'Chains supported' },
+              { value: '600+', label: 'Vaults indexed' },
+              { value: '$1M+', label: 'Min TVL threshold' },
+              { value: 'A–D', label: 'Live risk grading' },
+            ].map(({ value, label }) => (
+              <div key={label}>
+                <p className="text-3xl font-black text-on-surface tracking-tighter">{value}</p>
+                <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mt-1">{label}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* How It Works */}
+      {/* How it works */}
       <section className="py-24 max-w-7xl mx-auto px-6">
         <div className="text-center mb-16">
-          <h2 className="text-4xl font-extrabold tracking-tight mb-4">A Professional Diagnosis in 3 Steps</h2>
-          <p className="text-on-surface-variant max-w-xl mx-auto">Skip the spreadsheets. Let our AI do the deep-tissue analysis of your smart contracts and pool health.</p>
+          <h2 className="text-4xl font-extrabold tracking-tight mb-4">How Yield Doctor works</h2>
+          <p className="text-on-surface-variant max-w-xl mx-auto">Connect your wallet, browse vaults with live risk data, and deposit cross-chain in one transaction.</p>
         </div>
         <div className="grid md:grid-cols-3 gap-12 relative">
           <div className="hidden md:block absolute top-12 left-1/2 -translate-x-1/2 w-[70%] h-px bg-outline-variant -z-10"></div>
@@ -210,221 +163,201 @@ export default function HomePage({ onConnected }) {
               <span className="absolute -top-3 -right-3 w-8 h-8 bg-surface-container rounded-full flex items-center justify-center text-xs font-bold text-on-surface-variant">01</span>
             </div>
             <h3 className="text-xl font-bold">Connect Wallet</h3>
-            <p className="text-sm text-on-surface-variant px-6">Non-custodial and read-only. We never touch your private keys or assets.</p>
+            <p className="text-sm text-on-surface-variant px-6">Non-custodial, read-your-positions, and deposit-ready. Supports all major wallets via RainbowKit.</p>
           </div>
           <div className="text-center space-y-4">
             <div className="w-24 h-24 bg-primary-container rounded-3xl shadow-xl mx-auto flex items-center justify-center text-white relative">
-              <span className="material-symbols-outlined text-4xl animate-pulse">clinical_notes</span>
+              <span className="material-symbols-outlined text-4xl">verified_user</span>
               <span className="absolute -top-3 -right-3 w-8 h-8 bg-on-tertiary-container rounded-full flex items-center justify-center text-xs font-bold text-white">02</span>
             </div>
-            <h3 className="text-xl font-bold">AI Deep Scan</h3>
-            <p className="text-sm text-on-surface-variant px-6">Our doctor engine scans 1,200+ yield pools, protocol safety, and contract vulnerabilities.</p>
+            <h3 className="text-xl font-bold">Browse & Compare</h3>
+            <p className="text-sm text-on-surface-variant px-6">Explore 600+ vaults with live APY, TVL, risk grades (A–D), and APY trend predictions from DeFiLlama.</p>
           </div>
           <div className="text-center space-y-4">
             <div className="w-24 h-24 bg-surface-container-lowest rounded-3xl border border-surface-container shadow-sm mx-auto flex items-center justify-center text-on-tertiary-container relative">
-              <span className="material-symbols-outlined text-4xl">verified</span>
+              <span className="material-symbols-outlined text-4xl">bolt</span>
               <span className="absolute -top-3 -right-3 w-8 h-8 bg-surface-container rounded-full flex items-center justify-center text-xs font-bold text-on-surface-variant">03</span>
             </div>
-            <h3 className="text-xl font-bold">Get Diagnosis</h3>
-            <p className="text-sm text-on-surface-variant px-6">Receive a custom prescription to fix risks and instantly upgrade your yield profile.</p>
+            <h3 className="text-xl font-bold">Deposit Cross-Chain</h3>
+            <p className="text-sm text-on-surface-variant px-6">Deposit from any supported chain into any vault in one transaction, powered by LI.FI Composer — no manual bridging.</p>
           </div>
         </div>
       </section>
 
-      {/* Bento Feature Grid */}
+      {/* Feature bento */}
       <section className="py-24 bg-surface-container-low">
         <div className="max-w-7xl mx-auto px-6">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-            <div className="md:col-span-8 bento-card bg-surface-container-lowest p-10 rounded-[2.5rem] flex flex-col justify-between overflow-hidden">
+
+            {/* Big feature: Vault Explorer */}
+            <div className="md:col-span-8 bg-surface-container-lowest p-10 rounded-[2.5rem] flex flex-col justify-between overflow-hidden border border-surface-container">
               <div className="space-y-4">
                 <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center text-on-tertiary-container">
-                  <span className="material-symbols-outlined">monitor_heart</span>
+                  <span className="material-symbols-outlined">manage_search</span>
                 </div>
-                <h3 className="text-3xl font-extrabold tracking-tighter">Real-Time Health Monitoring</h3>
-                <p className="text-on-surface-variant max-w-md">Continuous surveillance across 400+ liquidity pools. We alert you to decoupling, LP drain, or contract pauses before they hit your balance.</p>
+                <h3 className="text-3xl font-extrabold tracking-tighter">Vault Explorer</h3>
+                <p className="text-on-surface-variant max-w-md">Browse every vault across 17 chains with live APY, 30-day averages, TVL depth, risk grades, and APY prediction trends — all in one filterable table.</p>
               </div>
-              <div className="mt-8 bg-surface-container rounded-2xl h-48 border border-surface-container-high flex items-center justify-center p-6">
-                <div className="w-full flex items-end gap-1 h-24">
-                  <div className="flex-grow bg-surface-container-high h-[60%] rounded-t-sm"></div>
-                  <div className="flex-grow bg-surface-container-high h-[70%] rounded-t-sm"></div>
-                  <div className="flex-grow bg-surface-container-high h-[65%] rounded-t-sm"></div>
-                  <div className="flex-grow bg-on-tertiary-container h-[90%] rounded-t-sm animate-pulse"></div>
-                  <div className="flex-grow bg-surface-container-high h-[55%] rounded-t-sm"></div>
-                  <div className="flex-grow bg-surface-container-high h-[80%] rounded-t-sm"></div>
+              <div className="mt-8 bg-surface-container rounded-2xl border border-surface-container-high p-4 space-y-2">
+                <div className="grid grid-cols-5 gap-3 text-[9px] font-black uppercase tracking-widest text-on-surface-variant px-2">
+                  <span className="col-span-2">Vault</span><span className="text-right">APY</span><span className="text-right">TVL</span><span className="text-center">Risk</span>
                 </div>
+                {[
+                  { name: 'Morpho USDC', apy: '8.41%', tvl: '$2.1B', grade: 'A', c: '#009844', bg: 'rgba(0,152,68,0.10)' },
+                  { name: 'Euler WETH Prime', apy: '5.22%', tvl: '$890M', grade: 'A', c: '#009844', bg: 'rgba(0,152,68,0.10)' },
+                  { name: 'Yearn USDC v3', apy: '6.80%', tvl: '$340M', grade: 'A', c: '#009844', bg: 'rgba(0,152,68,0.10)' },
+                ].map((v, i) => (
+                  <div key={i} className="grid grid-cols-5 gap-3 items-center px-2 py-2 rounded-xl hover:bg-surface-container transition-colors">
+                    <span className="col-span-2 text-xs font-bold text-on-surface truncate">{v.name}</span>
+                    <span className="text-xs font-black text-on-tertiary-container text-right">{v.apy}</span>
+                    <span className="text-xs font-medium text-on-surface-variant text-right">{v.tvl}</span>
+                    <div className="flex justify-center">
+                      <span className="inline-flex items-center justify-center w-6 h-6 text-[10px] font-black rounded-lg border"
+                        style={{ color: v.c, background: v.bg, borderColor: v.c + '55' }}>{v.grade}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-            <div className="md:col-span-4 bento-card bg-primary-container p-10 rounded-[2.5rem] text-white flex flex-col justify-between">
+
+            {/* Risk grading */}
+            <div className="md:col-span-4 bg-primary-container p-10 rounded-[2.5rem] text-white flex flex-col justify-between">
               <div className="space-y-4">
-                <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center text-tertiary-fixed-dim">
-                  <span className="material-symbols-outlined">trending_up</span>
+                <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center">
+                  <span className="material-symbols-outlined">verified</span>
                 </div>
-                <h3 className="text-3xl font-extrabold tracking-tighter">Yield Optimizer</h3>
-                <p className="text-on-primary-container text-sm">Smart rebalancing to capture the highest risk-adjusted APY in DeFi.</p>
+                <h3 className="text-3xl font-extrabold tracking-tighter">Risk Grades</h3>
+                <p className="text-on-primary-container text-sm">Every vault gets a live A–D risk grade based on APY volatility, TVL depth, protocol trust, and DeFiLlama pool flags.</p>
               </div>
-              <div className="mt-8 space-y-4">
-                <div className="flex justify-between items-center text-xs font-bold opacity-60">
-                  <span>CURRENT APY</span><span>4.2%</span>
-                </div>
-                <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-on-tertiary-container w-[35%]"></div>
-                </div>
-                <div className="flex justify-between items-center text-xs font-bold text-tertiary-fixed-dim pt-2">
-                  <span>OPTIMIZED</span><span>16.8%</span>
-                </div>
-                <div className="h-2 bg-tertiary-fixed-dim/20 rounded-full overflow-hidden">
-                  <div className="h-full bg-tertiary-fixed-dim w-full"></div>
-                </div>
+              <div className="mt-8 space-y-2">
+                {[
+                  { grade: 'A', label: 'Low risk', score: '≥ 70 pts', c: '#4ae176' },
+                  { grade: 'B', label: 'Moderate', score: '45–69 pts', c: '#fbbf24' },
+                  { grade: 'C', label: 'Higher risk', score: '20–44 pts', c: '#f97316' },
+                  { grade: 'D', label: 'High risk', score: '< 20 pts', c: '#f87171' },
+                ].map(({ grade, label, score, c }) => (
+                  <div key={grade} className="flex items-center justify-between px-3 py-2 bg-white/5 rounded-xl">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center justify-center w-6 h-6 text-xs font-black rounded-lg border border-white/20" style={{ color: c }}>{grade}</span>
+                      <span className="text-sm font-bold">{label}</span>
+                    </div>
+                    <span className="text-[10px] font-bold opacity-60">{score}</span>
+                  </div>
+                ))}
               </div>
             </div>
-            <div className="md:col-span-4 bento-card bg-surface-container-lowest p-8 rounded-3xl space-y-4">
-              <span className="material-symbols-outlined text-outline">security</span>
-              <h4 className="font-extrabold text-xl">Stability Index</h4>
-              <p className="text-on-surface-variant text-sm">Quantifying protocol risk through stress-test simulations and auditing history.</p>
+
+            {/* Compare */}
+            <div className="md:col-span-4 bg-surface-container-lowest p-8 rounded-3xl space-y-4 border border-surface-container">
+              <span className="material-symbols-outlined text-outline">compare_arrows</span>
+              <h4 className="font-extrabold text-xl">Head-to-Head Compare</h4>
+              <p className="text-on-surface-variant text-sm">Pick any two vaults from any chain and get a side-by-side breakdown of APY, TVL, risk grade, and a Doctor's Recommendation on which to deposit into.</p>
             </div>
-            <div className="md:col-span-4 bento-card bg-surface-container-lowest p-8 rounded-3xl space-y-4">
-              <span className="material-symbols-outlined text-outline">psychology</span>
-              <h4 className="font-extrabold text-xl">AI Doctor Reports</h4>
-              <p className="text-on-surface-variant text-sm">Human-readable analysis explaining exactly why your portfolio is underperforming.</p>
+
+            {/* Cross-chain deposits */}
+            <div className="md:col-span-4 bg-surface-container-lowest p-8 rounded-3xl space-y-4 border border-surface-container">
+              <span className="material-symbols-outlined text-outline">bolt</span>
+              <h4 className="font-extrabold text-xl">Cross-Chain Deposits</h4>
+              <p className="text-on-surface-variant text-sm">Use any token on any supported chain. LI.FI Composer bridges and deposits in a single transaction — no need to manually bridge first.</p>
             </div>
-            <div className="md:col-span-4 bento-card bg-surface-container-lowest p-8 rounded-3xl space-y-4">
-              <span className="material-symbols-outlined text-outline">hub</span>
-              <h4 className="font-extrabold text-xl">Multi-Chain Coverage</h4>
-              <p className="text-on-surface-variant text-sm">Unified view across Ethereum, Arbitrum, Base, Polygon, and Optimism.</p>
+
+            {/* Withdraw */}
+            <div className="md:col-span-4 bg-surface-container-lowest p-8 rounded-3xl space-y-4 border border-surface-container">
+              <span className="material-symbols-outlined text-outline">logout</span>
+              <h4 className="font-extrabold text-xl">Cross-Chain Withdrawals</h4>
+              <p className="text-on-surface-variant text-sm">Withdraw vault shares and receive any token on any destination chain. Full cross-chain exit powered by Composer, with live route quotes.</p>
             </div>
-            <div className="md:col-span-3 bento-card bg-surface-container-lowest p-8 rounded-3xl space-y-4">
-              <span className="material-symbols-outlined text-outline">notifications_active</span>
-              <h4 className="font-extrabold text-lg">Risk Alerts</h4>
-              <p className="text-on-surface-variant text-xs">Push notifications for de-pegging events and protocol exploits.</p>
-            </div>
-            <div className="md:col-span-6 bento-card bg-surface-container-lowest p-8 rounded-3xl flex items-center justify-between">
+
+            {/* Portfolio positions */}
+            <div className="md:col-span-6 bg-surface-container-lowest p-8 rounded-3xl flex items-center justify-between border border-surface-container">
               <div className="space-y-2">
-                <h4 className="font-extrabold text-xl">Historical Performance</h4>
-                <p className="text-on-surface-variant text-sm">Track how our doctor's advice would have performed.</p>
+                <h4 className="font-extrabold text-xl">Portfolio Dashboard</h4>
+                <p className="text-on-surface-variant text-sm">See all your active positions across chains in one place. USD balances, underlying assets, and protocol details — always in sync.</p>
               </div>
-              <div className="w-32 h-16 bg-surface-container rounded-lg border border-surface-container-high flex items-end gap-1 p-2">
-                <div className="w-2 h-[40%] bg-emerald-200 rounded-full"></div>
-                <div className="w-2 h-[60%] bg-emerald-300 rounded-full"></div>
-                <div className="w-2 h-[50%] bg-emerald-400 rounded-full"></div>
-                <div className="w-2 h-[90%] bg-on-tertiary-container rounded-full"></div>
+              <div className="w-12 h-12 bg-surface-container rounded-xl flex items-center justify-center shrink-0 ml-4">
+                <span className="material-symbols-outlined text-on-surface-variant">dashboard</span>
               </div>
             </div>
-            <div className="md:col-span-3 bento-card bg-surface-container-lowest p-8 rounded-3xl space-y-4">
-              <span className="material-symbols-outlined text-outline">auto_awesome</span>
-              <h4 className="font-extrabold text-lg">Smart Rebalance</h4>
-              <p className="text-on-surface-variant text-xs">One-click execution for AI recommended swaps.</p>
+
+            {/* APY predictions */}
+            <div className="md:col-span-6 bg-surface-container-lowest p-8 rounded-3xl flex items-center justify-between border border-surface-container">
+              <div className="space-y-2">
+                <h4 className="font-extrabold text-xl">APY Trend Predictions</h4>
+                <p className="text-on-surface-variant text-sm">Each vault shows an APP (APY Prediction Probability) signal from DeFiLlama's ML model — indicating whether APY is likely to go up, down, or stay flat.</p>
+              </div>
+              <div className="flex flex-col gap-1 shrink-0 ml-4">
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-black" style={{ color: '#009844', background: 'rgba(0,152,68,0.10)' }}>↑ 72%</span>
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-black" style={{ color: '#76777d', background: 'rgba(118,119,125,0.10)' }}>→ 51%</span>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Comparison */}
+      {/* Risk methodology CTA */}
       <section className="py-24 max-w-7xl mx-auto px-6">
         <div className="bg-primary-container text-white rounded-[3rem] p-12 md:p-20 relative overflow-hidden">
           <div className="grid md:grid-cols-2 gap-16 relative z-10">
-            <div className="space-y-12">
-              <h2 className="text-4xl md:text-5xl font-extrabold tracking-tighter">Level Up Your DeFi Game</h2>
-              <div className="space-y-6">
-                <div className="flex items-start gap-4">
-                  <div className="w-6 h-6 rounded-full bg-error/20 text-error flex items-center justify-center mt-1">
-                    <span className="material-symbols-outlined text-sm">close</span>
+            <div className="space-y-6">
+              <h2 className="text-4xl md:text-5xl font-extrabold tracking-tighter">Transparent risk scoring. No black boxes.</h2>
+              <p className="text-on-primary-container leading-relaxed">
+                Every risk grade is built from five independently scored dimensions — APY volatility (σ), historical APY drift, protocol trust tier, TVL depth, and pool-level flags from DeFiLlama. We publish the full methodology.
+              </p>
+              <div className="space-y-3">
+                {[
+                  { label: 'APY Volatility (σ)', pts: '0–40 pts' },
+                  { label: 'APY vs History (μ drift)', pts: '0–20 pts' },
+                  { label: 'Protocol Trust Tier', pts: '0–20 pts' },
+                  { label: 'TVL Depth', pts: '0–15 pts' },
+                  { label: 'Pool Flags', pts: '0–5 pts' },
+                ].map(({ label, pts }) => (
+                  <div key={label} className="flex items-center justify-between px-4 py-2.5 bg-white/5 rounded-xl border border-white/10">
+                    <span className="text-sm font-bold">{label}</span>
+                    <span className="text-xs font-black opacity-60">{pts}</span>
                   </div>
-                  <div>
-                    <h4 className="font-bold text-on-primary-container">Without Yield Doctor</h4>
-                    <p className="text-on-primary-container/70 text-sm">Guessing market moves, hidden protocol risks, and leaving 40% of potential yield on the table.</p>
-                  </div>
-                </div>
-                <div className="h-px bg-white/10"></div>
-                <div className="flex items-start gap-4">
-                  <div className="w-6 h-6 rounded-full bg-tertiary-fixed-dim/20 text-tertiary-fixed-dim flex items-center justify-center mt-1">
-                    <span className="material-symbols-outlined text-sm">check</span>
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-white">With Yield Doctor</h4>
-                    <p className="text-on-primary-container text-sm">Real-time AI insights, optimized risk-adjusted returns, and automated safety monitoring.</p>
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-8">
-              <div className="text-center">
-                <p className="text-[10px] uppercase font-black text-tertiary-fixed-dim tracking-[0.2em] mb-2">Sample Improvement</p>
-                <h4 className="text-2xl font-bold">Risk Score: 62 → 87</h4>
-              </div>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-on-primary-container">Historical APY</span>
-                  <span className="font-mono">8.4%</span>
+            <div className="flex flex-col justify-between">
+              <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
+                <div>
+                  <p className="text-[10px] uppercase font-black opacity-60 tracking-widest mb-2">Doctor's Pick algorithm</p>
+                  <p className="font-mono text-xs leading-relaxed opacity-80">
+                    score = sqrt(APY / 50) × 0.55<br />
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ log10(TVL / 10,000) / 4 × 0.45
+                  </p>
                 </div>
-                <div className="flex justify-between items-center text-lg font-bold">
-                  <span>Projected AI APY</span>
-                  <span className="text-tertiary-fixed-dim">18.2%</span>
-                </div>
+                <p className="text-sm text-on-primary-container leading-relaxed">
+                  Rewards high APY and deep TVL, both with diminishing returns — so a 200% APY vault doesn't automatically beat a rock-solid 8% one.
+                </p>
+                <a
+                  href="/risk-index"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-primary-container rounded-xl font-bold text-sm hover:opacity-90 transition-all"
+                >
+                  <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                  Read full methodology
+                </a>
               </div>
-              <button className="w-full py-4 bg-white text-primary-container rounded-xl font-bold hover:bg-surface-container transition-colors">
-                See Detailed Case Study
-              </button>
             </div>
           </div>
           <div className="absolute top-0 right-0 w-96 h-96 bg-on-tertiary-container/10 blur-[120px] rounded-full"></div>
         </div>
       </section>
 
-      {/* Testimonials */}
-      <section className="py-24 bg-surface-container-lowest">
-        <div className="max-w-7xl mx-auto px-6">
-          <h2 className="text-3xl font-extrabold text-center mb-16">Prescribed by the Pros</h2>
-          <div className="grid md:grid-cols-3 gap-8">
-            {[
-              { quote: '"Yield Doctor flagged a decoupling risk in a pool I\'ve been in for months. Saved me from a 15% loss before anyone even tweeted about it."', name: 'Alex R.', role: 'Yield Farmer', initials: 'AR' },
-              { quote: '"The diagnostic report is surprisingly accurate. It found idle assets across 3 chains I\'d completely forgotten about."', name: 'DegenData', role: 'Whale Analyst', initials: 'DD' },
-              { quote: '"Boosted my portfolio APY from 5.5% to 14.1% without significantly increasing my risk profile. The doctor is in."', name: 'Sarah K.', role: 'Full-time DeFi', initials: 'SK' },
-            ].map((t, i) => (
-              <div key={i} className="p-8 rounded-3xl bg-surface-container border border-surface-container-high space-y-4">
-                <div className="flex gap-1 text-amber-400 text-sm">★★★★★</div>
-                <p className="text-on-surface-variant italic">{t.quote}</p>
-                <div className="flex items-center gap-3 pt-4">
-                  <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-xs font-bold text-on-surface-variant">{t.initials}</div>
-                  <div>
-                    <p className="text-xs font-bold">{t.name}</p>
-                    <p className="text-[10px] text-outline uppercase">{t.role}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Trust & Security */}
-      <section className="py-16 border-t border-outline-variant bg-surface-container-low/50">
-        <div className="max-w-7xl mx-auto px-6 text-center">
-          <h3 className="text-xs uppercase font-black tracking-[0.3em] text-outline mb-10">Institutional Grade Security</h3>
-          <div className="flex flex-wrap justify-center gap-8 md:gap-16">
-            {[['lock', 'Non-Custodial'], ['visibility', 'Read-Only Access'], ['verified_user', 'Audited Engine']].map(([icon, label]) => (
-              <div key={icon} className="flex items-center gap-3 grayscale opacity-60">
-                <span className="material-symbols-outlined text-3xl">{icon}</span>
-                <span className="font-bold">{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Final CTA — no textbox, just button */}
+      {/* Final CTA */}
       <section className="py-24 px-6 text-center">
         <div className="max-w-3xl mx-auto space-y-8">
-          <h2 className="text-4xl md:text-5xl font-extrabold tracking-tighter">Your Portfolio Is Already Losing Yield.</h2>
-          <p className="text-xl text-on-surface-variant">Stop guessing. Run a diagnosis now and see exactly how to optimize your capital.</p>
-          <div className="flex justify-center pt-6">
+          <h2 className="text-4xl md:text-5xl font-extrabold tracking-tighter">Ready to find your best yield?</h2>
+          <p className="text-xl text-on-surface-variant">Connect your wallet to see your positions and explore vaults across 17 chains.</p>
+          <div className="flex justify-center pt-4">
             <button
-              onClick={handleRunDiagnosis}
+              onClick={handleConnect}
               className="bg-primary-container text-white px-10 py-4 rounded-xl font-bold text-lg hover:shadow-xl transition-all active:scale-95"
             >
-              Start Diagnosis
+              Connect Wallet
             </button>
           </div>
-          <p className="text-xs text-outline font-medium">No signup required. Instant analysis.</p>
+          <p className="text-xs text-outline font-medium">Non-custodial · Read-only portfolio scan · No signup required</p>
         </div>
       </section>
 
@@ -438,21 +371,20 @@ export default function HomePage({ onConnected }) {
               </div>
               <span className="text-xl font-extrabold tracking-tighter">Yield Doctor</span>
             </div>
-            <p className="text-sm leading-relaxed">Providing institutional-grade clinical diagnostics for the decentralized financial frontier.</p>
+            <p className="text-sm leading-relaxed">Live vault risk grading and cross-chain deposits for serious DeFi yield seekers.</p>
           </div>
           <div className="space-y-4">
             <h5 className="text-white text-xs font-black uppercase tracking-widest">Platform</h5>
             <ul className="space-y-2 text-sm">
-              <li><a className="hover:text-white transition-colors" href="#">Portfolio Scan</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Vault Explorer</a></li>
-              <li><a className="hover:text-white transition-colors" href="/risk-index">Risk Metrics</a></li>
+              <li><a className="hover:text-white transition-colors" href="/vaults">Vault Explorer</a></li>
+              <li><a className="hover:text-white transition-colors" href="/compare">Compare Vaults</a></li>
+              <li><a className="hover:text-white transition-colors" href="/dashboard">My Positions</a></li>
             </ul>
           </div>
           <div className="space-y-4">
             <h5 className="text-white text-xs font-black uppercase tracking-widest">Resources</h5>
             <ul className="space-y-2 text-sm">
-              <li><a className="hover:text-white transition-colors" href="#">AI Whitepaper</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Security Audit</a></li>
+              <li><a className="hover:text-white transition-colors" href="/risk-index">Risk Methodology</a></li>
               <li><a className="hover:text-white transition-colors" href="/api">API Docs</a></li>
             </ul>
           </div>
@@ -481,14 +413,13 @@ export default function HomePage({ onConnected }) {
           </div>
         </div>
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center text-[10px] font-bold uppercase tracking-widest gap-4">
-          <p>© 2024 Yield Doctor. ALL FINANCIAL ADVICE IS GENERATED BY AI MODELS.</p>
+          <p>© 2024 Yield Doctor. Not financial advice.</p>
           <div className="flex gap-8">
             <a className="hover:text-white transition-colors" href="#">Privacy Policy</a>
-            <a className="hover:text-white transition-colors" href="#">Terms of Care</a>
+            <a className="hover:text-white transition-colors" href="#">Terms of Service</a>
           </div>
         </div>
       </footer>
-
     </div>
   )
 }
