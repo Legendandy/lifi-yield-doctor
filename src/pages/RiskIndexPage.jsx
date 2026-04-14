@@ -1,4 +1,5 @@
 // src/pages/RiskIndexPage.jsx
+import { Link } from "react-router-dom"
 export default function RiskIndexPage() {
   return (
     <div className="bg-surface text-on-surface min-h-screen">
