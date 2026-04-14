@@ -134,10 +134,15 @@ export async function getWithdrawQuote({
 
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText)
-    let msg = `Quote failed (${res.status}).`
-    try { const p = JSON.parse(txt); if (p.message) msg = p.message } catch {}
-    if (res.status === 404 || txt.toLowerCase().includes('no routes')) {
-      msg = 'No withdrawal route found. Try a different destination token.'
+    let msg
+    if (res.status === 422) {
+      msg = 'No available routes found, try again.'
+    } else {
+      msg = `Quote failed (${res.status}).`
+      try { const p = JSON.parse(txt); if (p.message) msg = p.message } catch {}
+      if (res.status === 404 || txt.toLowerCase().includes('no routes')) {
+        msg = 'No available routes found, try again.'
+      }
     }
     throw new Error(msg)
   }

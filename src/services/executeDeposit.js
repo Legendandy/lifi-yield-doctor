@@ -99,6 +99,9 @@ export async function getComposerQuote({
         'Try depositing from the same chain as the vault.'
       )
     }
+    if (res.status === 422) {
+      throw new Error('No available routes found, try again.')
+    }
     throw new Error(`Composer quote failed (${res.status}): ${errText.slice(0, 200)}`)
   }
 
