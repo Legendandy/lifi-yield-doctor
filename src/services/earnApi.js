@@ -66,7 +66,7 @@ export async function getVaultByAddress(chainId, address) {
   if (cached) return cached
   try {
     const BASE = getEarnApiBase()
-    const data = await safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
+    const data = await safeFetch(`${BASE}/v1/vaults/${chainId}/${address}`)
     if (data && data.analytics) {
       setCached(cacheKey, data)
       return data
@@ -84,7 +84,7 @@ export async function getPortfolioPositions(userAddress) {
   let json
   try {
     const BASE = getEarnApiBase()
-    json = await safeFetch(`${BASE}/v1/earn/portfolio/${userAddress}/positions`)
+    json = await safeFetch(`${BASE}/v1/portfolio/${userAddress}/positions`)
   } catch (err) {
     console.error('[getPortfolioPositions] Failed:', err.message)
     return []
@@ -160,7 +160,7 @@ export async function getVaultsForChain({ chainId, maxPages = 15 } = {}) {
     if (cursor) params.set('cursor', cursor)
     let json
     try {
-      json = await safeFetch(`${BASE}/v1/earn/vaults?${params}`)
+      json = await safeFetch(`${BASE}/v1/vaults?${params}`)
     } catch (err) {
       if (pages === 0) throw err
       break
@@ -228,7 +228,7 @@ export async function getVaults({
   if (protocol) params.set('protocol', protocol)
   if (sortBy) params.set('sortBy', sortBy)
   params.set('limit', '100')
-  const json = await safeFetch(`${BASE}/v1/earn/vaults?${params}`)
+  const json = await safeFetch(`${BASE}/v1/vaults?${params}`)
   const raw = Array.isArray(json) ? json : (json.data ?? [])
   return raw
     .filter(v => isVaultSane(v) && Number(v?.analytics?.tvl?.usd ?? 0) >= minTvlUsd)
@@ -238,7 +238,7 @@ export async function getVaults({
 
 export async function getVaultById(chainId, address) {
   const BASE = getEarnApiBase()
-  return safeFetch(`${BASE}/v1/earn/vaults/${chainId}/${address}`)
+  return safeFetch(`${BASE}/v1/vaults/${chainId}/${address}`)
 }
 
 export async function getSupportedChains() {
@@ -246,12 +246,12 @@ export async function getSupportedChains() {
   const cached = getCached(cacheKey)
   if (cached) return cached
   const BASE = getEarnApiBase()
-  const data = await safeFetch(`${BASE}/v1/earn/chains`)
+  const data = await safeFetch(`${BASE}/v1/chains`)
   setCached(cacheKey, data)
   return data
 }
 
 export async function getProtocols() {
   const BASE = getEarnApiBase()
-  return safeFetch(`${BASE}/v1/earn/protocols`)
+  return safeFetch(`${BASE}/v1/protocols`)
 }
